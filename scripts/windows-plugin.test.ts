@@ -90,7 +90,7 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
     await run("start"); // forced Windows shutdown leaves a stale lock; restart must recover it
     expect((await fetch(`http://127.0.0.1:${port}/api/health`)).ok).toBe(true);
     await run("stop");
-    const unrelated = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30000)"], { stdout: "ignore", stderr: "ignore" });
+    const unrelated = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 90000)"], { stdout: "ignore", stderr: "ignore" });
     try {
       writeFileSync(join(state, "server.pid"), String(unrelated.pid));
       await run("stop", 1);
@@ -107,7 +107,9 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
       await run("stop");
     } finally {
       unrelated.kill(); await unrelated.exited;
-      rmSync(join(state, "server.pid"), { force: true });
+      if (existsSync(join(state, "server.pid")) && Number(readFileSync(join(state, "server.pid"), "utf8")) === unrelated.pid) {
+        rmSync(join(state, "server.pid"));
+      }
     }
   } finally {
     if (existsSync(join(state, "server.pid"))) await run("stop");
