@@ -3,5 +3,13 @@ param([string]$Command = 'status')
 $ErrorActionPreference = 'Stop'
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $env:PATH = "$env:USERPROFILE\.bun\bin;$userPath;$env:PATH"
+if ($Command -eq 'start') {
+    # A fresh hidden console keeps PowerShell's output pipes out of the detached server.
+    $child = Start-Process -FilePath (Get-Command bun).Source -ArgumentList ('"{0}" start' -f (Join-Path $PSScriptRoot 'plugin.ts')) -WindowStyle Hidden -PassThru
+    $child.WaitForExit() # -Wait would also wait for the server's descendants.
+    if ($child.ExitCode -ne 0) { throw "Could not start herdr web ui. See $env:HERDR_PLUGIN_STATE_DIR\server.log" }
+    Write-Output 'herdr web ui started'
+    exit 0
+}
 & bun (Join-Path $PSScriptRoot 'plugin.ts') $Command
 exit $LASTEXITCODE

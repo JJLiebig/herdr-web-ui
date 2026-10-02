@@ -44,28 +44,28 @@ command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "s
 platforms = ["windows"]
 
 [[actions]]
-id = "stop-windows"
+id = "stop"
 title = "Stop herdr web ui"
 contexts = ["workspace"]
 command = ["bun", "scripts/plugin.ts", "stop"]
 platforms = ["linux", "macos"]
 
 [[actions]]
-id = "stop"
+id = "stop-windows"
 title = "Stop herdr web ui"
 contexts = ["workspace"]
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "stop"]
 platforms = ["windows"]
 
 [[actions]]
-id = "status-windows"
+id = "status"
 title = "herdr web ui status"
 contexts = ["workspace"]
 command = ["bun", "scripts/plugin.ts", "status"]
 platforms = ["linux", "macos"]
 
 [[actions]]
-id = "status"
+id = "status-windows"
 title = "herdr web ui status"
 contexts = ["workspace"]
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "status"]
