@@ -7,6 +7,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Added
+- Native Windows x64 installation through `install.ps1`, with the same herdr plugin startup and updates. Windows needs Bun and Git, without Node or WSL, and keeps using the terminal screen mirror.
+
 ## [0.3.43] - 2026-10-02
 
 ### Changed

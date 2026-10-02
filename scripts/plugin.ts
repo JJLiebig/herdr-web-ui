@@ -16,10 +16,10 @@
  *   token and any overrides are read from `env` and `.env` in HERDR_PLUGIN_CONFIG_DIR.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 
 import qrcode from "qrcode-generator";
 
@@ -34,7 +34,7 @@ import { parseTailscale, parseTailscaleIp, parseTailscaleOwner, readTailscale, t
  * Declared before CONFIG_DIR, whose lookup uses it.
  */
 const ENV_FILES = ["env", ".env"];
-const ROOT = process.env["HERDR_PLUGIN_ROOT"] ?? import.meta.dir.replace(/\/scripts$/, "");
+const ROOT = process.env["HERDR_PLUGIN_ROOT"] ?? resolve(import.meta.dir, "..");
 const STATE_DIR = process.env["HERDR_PLUGIN_STATE_DIR"] ?? join(homedir(), ".local", "state", "herdr-web-ui");
 const CONFIG_DIR = process.env["HERDR_PLUGIN_CONFIG_DIR"] ?? herdrConfigDir() ?? join(homedir(), ".config", "herdr-web-ui");
 const PID_FILE = join(STATE_DIR, "server.pid");
@@ -48,7 +48,9 @@ const KILL_WAIT_MS = 3_000;
 /** `tailscale serve` waits while the user turns HTTPS on for the tailnet at the link it prints */
 const SERVE_TIMEOUT_MS = 180_000;
 /** how to come back to `phone` once Tailscale is set up: an action's output goes to herdr's log, not a terminal */
-const PHONE_AGAIN = "curl -fsSL https://devswha.github.io/herdr-web-ui/install.sh | sh";
+const PHONE_AGAIN = platform() === "win32"
+  ? "irm https://devswha.github.io/herdr-web-ui/install.ps1 | iex"
+  : "curl -fsSL https://devswha.github.io/herdr-web-ui/install.sh | sh";
 
 /**
  * Run by hand (`pair` on a headless PC), herdr's env is not there to name the config dir:
@@ -95,10 +97,10 @@ const origin = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
  * terminal. Appended, so a Node the user chose (nvm, Homebrew) still comes first.
  */
 function toolPath(): string {
-  const current = (env["PATH"] ?? "").split(":").filter(Boolean);
+  const current = (env["PATH"] ?? "").split(delimiter).filter(Boolean);
   const home = homedir();
   const extra = [join(home, ".bun", "bin"), join(home, ".local", "bin"), join(home, ".local", "share", "herdr-web-ui", "node", "bin")];
-  return [...current, ...extra.filter((dir) => existsSync(dir) && !current.includes(dir))].join(":");
+  return [...current, ...extra.filter((dir) => existsSync(dir) && !current.includes(dir))].join(delimiter);
 }
 
 /** A clickable address where a terminal shows it (OSC 8), plain where the output goes to a log or a file. */
@@ -151,6 +153,7 @@ async function start(): Promise<number> {
   const child = spawn(process.execPath, ["server/managed.ts"], {
     cwd: ROOT,
     detached: true,
+    windowsHide: true,
     stdio: ["ignore", log, log],
     env: {
       ...env,
@@ -225,12 +228,21 @@ async function stop(): Promise<number> {
     return 0;
   }
   // the whole process group when the server leads one, as `start` spawns it
-  let target = -pid;
-  try {
-    process.kill(target, "SIGTERM");
-  } catch {
-    target = pid;
-    process.kill(pid, "SIGTERM");
+  let target = platform() === "win32" ? pid : -pid;
+  if (platform() === "win32") {
+    // Windows has no Unix process groups or graceful SIGTERM: include the supervisor and bridge.
+    const killed = spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], { windowsHide: true, encoding: "utf8" });
+    if (killed.status !== 0 && recordedPid() !== null) {
+      process.stderr.write(`could not stop herdr web ui: ${killed.error?.message ?? killed.stderr.trim()}\n`);
+      return 1;
+    }
+  } else {
+    try {
+      process.kill(target, "SIGTERM");
+    } catch {
+      target = pid;
+      process.kill(pid, "SIGTERM");
+    }
   }
   const running = (): boolean => {
     try {

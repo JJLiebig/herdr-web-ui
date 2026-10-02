@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { updateStateDir } from "../server/update-state.ts";
 
 /** The plugin checkout survives updates; pane entrypoints must follow its active release. */
@@ -14,6 +14,6 @@ export function activePluginScript(root: string, port: number, stateDir: string)
     const directory = realpathSync(saved.directory);
     if (dirname(directory) !== realpathSync(updates) || !basename(directory).startsWith("release-")) return own;
     const file = join(directory, "scripts", "plugin.ts");
-    return existsSync(file) && realpathSync(file).startsWith(directory + "/") ? file : own;
+    return existsSync(file) && realpathSync(file).startsWith(directory + sep) ? file : own;
   } catch { return own; }
 }

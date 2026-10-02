@@ -24,7 +24,7 @@ web server on port `7317` and never replaces herdr, its sessions or the user's o
 
 ```bash
 bun --version        # need 1.4 or newer
-node --version       # need v18 or newer (it runs the terminal-attach sidecar)
+node --version       # Linux/macOS only: need v18 or newer for the terminal-attach sidecar
 herdr --version      # need 0.9.0 or newer
 herdr status server  # the herdr server must be running
 git --version
@@ -33,7 +33,7 @@ git --version
 - A missing tool: **Ask** the user before installing it. Bun: `curl -fsSL https://bun.sh/install | bash`.
   herdr: <https://herdr.dev>. Node: the user's usual manager (nvm, Homebrew, distro packages).
 - herdr not running: ask the user to start `herdr` in a terminal, then check again.
-- Supported platforms: Linux x64 and arm64, macOS. No compiler or Python is needed: the terminal
+- Supported platforms: Linux x64 and arm64, macOS, Windows x64. Windows uses the [screen mirror](docs/remote-pcs.md#windows-pcs), so Node is not needed there. No compiler or Python is needed: the terminal
   addon is prebuilt for these platforms. Other platforms (Alpine, 32-bit ARM) have no build.
 
 ## 2. Choose the install method
@@ -50,6 +50,11 @@ Node 22 for the user only (no sudo) when they are missing, installs the plugin, 
 runs, and, when Tailscale runs on the PC, serves the app to the tailnet (`tailscale serve`) and
 prints the address as a QR code. It changes the user's Tailscale configuration, so it needs the
 same **Ask** as step 5. Running it again keeps what is there.
+
+On Windows x64, use `irm https://devswha.github.io/herdr-web-ui/install.ps1 | iex` in PowerShell.
+It requires Git for Windows and installs missing herdr and Bun for the user, without Node or WSL.
+It starts the plugin when herdr runs. Phone access stays optional: use the **Phone setup** action.
+`HERDR_WEB_UI_REF` selects a branch or tag for testing; otherwise it installs the latest release.
 
 ## 3A. Install as a herdr plugin
 
