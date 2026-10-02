@@ -51,7 +51,7 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
     const pid = Number(readFileSync(join(state, "server.pid"), "utf8").trim());
     const rows = await windowsProcessTable(30_000);
     const owned = new Set([pid]);
-    for (const parent of owned) for (const row of rows) if (row.parentPid === parent) owned.add(row.pid);
+    for (const parent of owned) for (const row of rows) if (row.parent === parent) owned.add(row.pid);
     expect(owned.size).toBeGreaterThanOrEqual(3);
     await run("start"); // an already running plugin is preserved
     expect(Number(readFileSync(join(state, "server.pid"), "utf8"))).toBe(pid);
