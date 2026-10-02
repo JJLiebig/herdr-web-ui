@@ -1,6 +1,7 @@
 # Herdr may have started before Bun was installed: read the current user PATH at invocation time.
 param([string]$Command = 'status')
 $ErrorActionPreference = 'Stop'
+if (-not $env:HOME) { $env:HOME = $env:USERPROFILE }
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $env:PATH = "$env:USERPROFILE\.bun\bin;$userPath;$env:PATH"
 if ($Command -eq 'start') {

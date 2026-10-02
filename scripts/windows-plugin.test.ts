@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { socketAddress } from "../server/herdr/client.ts";
 import { windowsProcessTable } from "../server/windows-processes.ts";
+import { updateStateDir } from "../server/update-state.ts";
 
 it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops its owned tree and restarts on Windows", async () => {
   const root = join(import.meta.dir, "..");
@@ -18,6 +19,9 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
   };
   const socket = join(scratch, "herdr.sock");
   writeFileSync(socket, "test");
+  const transcript = join(scratch, ".omp", "agent", "sessions", "history.jsonl");
+  mkdirSync(dirname(transcript), { recursive: true });
+  writeFileSync(transcript, JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "saved history" }] } }) + "\n");
   // An isolated Herdr wire peer: no real sessions, panes, plugin registry or push keys.
   const peer = createServer(connection => {
     let buffer = "";
@@ -27,7 +31,8 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
       const request = JSON.parse(buffer.trim());
       const result = request.method === "ping"
         ? { version: "0.9.3", protocol: 22, capabilities: { direct_terminal_attach: false } }
-        : { snapshot: { workspaces: [], panes: [], tabs: [] } };
+        : request.method === "agent.get" ? { agent: { agent_session: { kind: "path", value: transcript } } }
+        : { snapshot: { workspaces: [], panes: [{ pane_id: "history", agent: "omp", cwd: scratch }], tabs: [] } };
       connection.end(JSON.stringify({ id: request.id, result }) + "\n");
     });
   });
@@ -39,7 +44,7 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
   const state = join(scratch, "plugin-state");
   mkdirSync(config);
   writeFileSync(join(config, ".env"), `HOST=127.0.0.1\nPORT=${port}\n`);
-  const env: Record<string, string | undefined> = { ...process.env, HOME: scratch, USERPROFILE: scratch, APPDATA: join(scratch, "appdata"),
+  const env: Record<string, string | undefined> = { ...process.env, HOME: undefined, USERPROFILE: scratch, APPDATA: join(scratch, "appdata"),
     // A running Herdr without Bun on PATH: the manifest's real Windows launcher must find it.
     Path: ["taskkill", "powershell", "git"].map(tool => dirname(Bun.which(tool)!)).join(";"),
     HERDR_SOCKET: socket, HERDR_SOCKET_PATH: socket, HERDR_PLUGIN_ROOT: undefined,
@@ -60,6 +65,9 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
     const health = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json() as { herdr: { terminal_mirror: boolean } };
     expect(health.herdr.terminal_mirror).toBe(true);
     expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(200);
+    const history = await (await fetch(`http://127.0.0.1:${port}/api/pane/conversation?pane_id=history`)).json() as { source: string; turns: unknown[] };
+    expect(history.source).toBe("omp-transcript");
+    expect(JSON.stringify(history.turns)).toContain("saved history");
     // The spawned server must retain git on Windows' usual mixed-case Path key.
     const updates = await (await fetch(`http://127.0.0.1:${port}/api/updates`)).json() as { current_revision: string | null };
     expect(updates.current_revision).toMatch(/^[a-f0-9]{40}$/);
@@ -88,6 +96,15 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
       await run("stop", 1);
       expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
       expect(existsSync(join(state, "server.pid"))).toBe(true);
+      rmSync(join(state, "server.pid"));
+      const staleLock = join(updateStateDir(root, port, env["HERDR_WEB_STATE_DIR"]), "supervisor.lock", "pid");
+      expect(existsSync(staleLock)).toBe(true);
+      writeFileSync(staleLock, String(unrelated.pid));
+      utimesSync(staleLock, new Date(0), new Date(0));
+      await run("start"); // a reused supervisor PID must not block restart or be terminated
+      expect((await fetch(`http://127.0.0.1:${port}/api/health`)).ok).toBe(true);
+      expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
+      await run("stop");
     } finally {
       unrelated.kill(); await unrelated.exited;
       rmSync(join(state, "server.pid"), { force: true });
