@@ -17,7 +17,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 
@@ -27,6 +27,7 @@ import { DEFAULT_PORT } from "../shared/protocol.ts";
 import type { RemoteAccess } from "../shared/protocol.ts";
 import { activePluginScript } from "./plugin-runtime.ts";
 import { parseTailscale, parseTailscaleIp, parseTailscaleOwner, readTailscale, tailscaleBinary } from "../server/tailscale.ts";
+import { windowsArgv, windowsProcessTable } from "../server/windows-processes.ts";
 
 /**
  * Read in this order, so `.env` wins: `env` is what this plugin read first, `.env` is what herdr's
@@ -34,7 +35,7 @@ import { parseTailscale, parseTailscaleIp, parseTailscaleOwner, readTailscale, t
  * Declared before CONFIG_DIR, whose lookup uses it.
  */
 const ENV_FILES = ["env", ".env"];
-const ROOT = process.env["HERDR_PLUGIN_ROOT"] ?? resolve(import.meta.dir, "..");
+const ROOT = resolve(process.env["HERDR_PLUGIN_ROOT"] ?? join(import.meta.dir, ".."));
 const STATE_DIR = process.env["HERDR_PLUGIN_STATE_DIR"] ?? join(homedir(), ".local", "state", "herdr-web-ui");
 const CONFIG_DIR = process.env["HERDR_PLUGIN_CONFIG_DIR"] ?? herdrConfigDir() ?? join(homedir(), ".config", "herdr-web-ui");
 const PID_FILE = join(STATE_DIR, "server.pid");
@@ -87,6 +88,7 @@ const fileVars = CONFIG_FILES.map(readEnvFile);
 /** keys both files set to different values: `.env` wins, which someone editing `env` would not expect */
 const shadowed = fileVars.length === 2 ? Object.keys(fileVars[0]!).filter((key) => key in fileVars[1]! && fileVars[0]![key] !== fileVars[1]![key]) : [];
 const env = { ...process.env, ...Object.assign({}, ...fileVars) as Record<string, string> };
+const PATH_KEY = platform() === "win32" ? Object.keys(env).sort().find(key => key.toLowerCase() === "path") ?? "PATH" : "PATH";
 const port = Number(env["PORT"] ?? DEFAULT_PORT);
 const host = env["HOST"] ?? "127.0.0.1";
 const origin = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
@@ -97,7 +99,7 @@ const origin = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
  * terminal. Appended, so a Node the user chose (nvm, Homebrew) still comes first.
  */
 function toolPath(): string {
-  const current = (env["PATH"] ?? "").split(delimiter).filter(Boolean);
+  const current = (env[PATH_KEY] ?? "").split(delimiter).filter(Boolean);
   const home = homedir();
   const extra = [join(home, ".bun", "bin"), join(home, ".local", "bin"), join(home, ".local", "share", "herdr-web-ui", "node", "bin")];
   return [...current, ...extra.filter((dir) => existsSync(dir) && !current.includes(dir))].join(delimiter);
@@ -150,14 +152,14 @@ async function start(): Promise<number> {
   }
   mkdirSync(STATE_DIR, { recursive: true });
   const log = openSync(LOG_FILE, "a");
-  const child = spawn(process.execPath, ["server/managed.ts"], {
+  const child = spawn(process.execPath, [join(ROOT, "server", "managed.ts")], {
     cwd: ROOT,
     detached: true,
     windowsHide: true,
     stdio: ["ignore", log, log],
     env: {
       ...env,
-      PATH: toolPath(),
+      [PATH_KEY]: toolPath(),
       HOST: host,
       PORT: String(port),
       // herdr hands the plugin HERDR_SOCKET_PATH; the server (and the attach it
@@ -230,6 +232,18 @@ async function stop(): Promise<number> {
   // the whole process group when the server leads one, as `start` spawns it
   let target = platform() === "win32" ? pid : -pid;
   if (platform() === "win32") {
+    // A stale PID can belong to another app, or a newer instance of this plugin.
+    const recordedAt = statSync(PID_FILE).mtimeMs;
+    const owner = (await windowsProcessTable()).find(row => row.pid === pid);
+    const argv = windowsArgv(owner?.commandLine ?? "");
+    if (owner?.path?.toLowerCase() !== process.execPath.toLowerCase()
+      || argv[1]?.toLowerCase() !== join(ROOT, "server", "managed.ts").toLowerCase()
+      || owner.started === undefined || owner.started > recordedAt
+      || !existsSync(PID_FILE) || statSync(PID_FILE).mtimeMs !== recordedAt
+      || Number(readFileSync(PID_FILE, "utf8").trim()) !== pid) {
+      process.stderr.write("could not verify the recorded herdr web ui process; it was left running and its pid file was kept\n");
+      return 1;
+    }
     // Windows has no Unix process groups or graceful SIGTERM: include the supervisor and bridge.
     const killed = spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], { windowsHide: true, encoding: "utf8" });
     if (killed.status !== 0 && recordedPid() !== null) {

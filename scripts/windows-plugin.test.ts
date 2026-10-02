@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -39,18 +39,19 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
   const state = join(scratch, "plugin-state");
   mkdirSync(config);
   writeFileSync(join(config, ".env"), `HOST=127.0.0.1\nPORT=${port}\n`);
-  const env = { ...process.env, HOME: scratch, USERPROFILE: scratch, APPDATA: join(scratch, "appdata"),
+  const env: Record<string, string | undefined> = { ...process.env, HOME: scratch, USERPROFILE: scratch, APPDATA: join(scratch, "appdata"),
     // A running Herdr without Bun on PATH: the manifest's real Windows launcher must find it.
-    PATH: ["taskkill", "powershell", "git"].map(tool => dirname(Bun.which(tool)!)).join(";"),
+    Path: ["taskkill", "powershell", "git"].map(tool => dirname(Bun.which(tool)!)).join(";"),
     HERDR_SOCKET: socket, HERDR_SOCKET_PATH: socket, HERDR_PLUGIN_ROOT: undefined,
     HERDR_PLUGIN_STATE_DIR: state, HERDR_PLUGIN_CONFIG_DIR: config, HERDR_WEB_STATE_DIR: join(scratch, "app-state"),
     HERDR_WEB_AUTO_UPDATE: "0", HERDR_WEB_TOKEN: "", HOST: "127.0.0.1", PORT: String(port) };
-  const run = async (command: string) => {
+  delete env["PATH"];
+  const run = async (command: string, expectedCode = 0) => {
     const entry = command === "start" ? manifest.startup.find(entry => entry.platforms.includes("windows"))
       : manifest.actions.find(entry => entry.id === `${command}-windows` && entry.platforms?.includes("windows"));
     const child = Bun.spawn(entry!.command, { cwd: root, env, stdout: "pipe", stderr: "pipe" });
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect(code, err + out + (existsSync(join(state, "server.log")) ? readFileSync(join(state, "server.log"), "utf8") : "")).toBe(0);
+    expect(code, err + out + (existsSync(join(state, "server.log")) ? readFileSync(join(state, "server.log"), "utf8") : "")).toBe(expectedCode);
     return out;
   };
   try {
@@ -59,6 +60,9 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
     const health = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json() as { herdr: { terminal_mirror: boolean } };
     expect(health.herdr.terminal_mirror).toBe(true);
     expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(200);
+    // The spawned server must retain git on Windows' usual mixed-case Path key.
+    const updates = await (await fetch(`http://127.0.0.1:${port}/api/updates`)).json() as { current_revision: string | null };
+    expect(updates.current_revision).toMatch(/^[a-f0-9]{40}$/);
     const pid = Number(readFileSync(join(state, "server.pid"), "utf8").trim());
     const rows = await windowsProcessTable(30_000);
     const owned = new Set([pid]);
@@ -66,12 +70,28 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
     expect(owned.size).toBeGreaterThanOrEqual(3);
     await run("start"); // an already running plugin is preserved
     expect(Number(readFileSync(join(state, "server.pid"), "utf8"))).toBe(pid);
+    const record = statSync(join(state, "server.pid"));
+    try {
+      utimesSync(join(state, "server.pid"), record.atime, new Date(0));
+      await run("stop", 1); // a matching app started after an old PID record is not its owner
+      expect((await fetch(`http://127.0.0.1:${port}/api/health`)).ok).toBe(true);
+    } finally { utimesSync(join(state, "server.pid"), record.atime, record.mtime); }
     await run("stop");
     for (const member of owned) expect(() => process.kill(member, 0)).toThrow();
     expect(existsSync(join(state, "server.pid"))).toBe(false);
     await run("start"); // forced Windows shutdown leaves a stale lock; restart must recover it
     expect((await fetch(`http://127.0.0.1:${port}/api/health`)).ok).toBe(true);
     await run("stop");
+    const unrelated = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30000)"], { stdout: "ignore", stderr: "ignore" });
+    try {
+      writeFileSync(join(state, "server.pid"), String(unrelated.pid));
+      await run("stop", 1);
+      expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
+      expect(existsSync(join(state, "server.pid"))).toBe(true);
+    } finally {
+      unrelated.kill(); await unrelated.exited;
+      rmSync(join(state, "server.pid"), { force: true });
+    }
   } finally {
     if (existsSync(join(state, "server.pid"))) await run("stop");
     await new Promise<void>(resolve => peer.close(() => resolve()));

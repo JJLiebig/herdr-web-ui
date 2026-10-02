@@ -50,6 +50,12 @@ try {
     Assert ($state.installed -and $state.ref -eq 'v1.10.0' -and $state.started) 'Install must choose the highest stable release and start a running server'
     & $installer -Ref ''
     Assert ($state.installs -eq 1) 'Rerun must preserve the installed plugin'
+    & {
+        $ErrorActionPreference = 'Continue'
+        Invoke-Expression (Get-Content -Raw $installer)
+        Assert ($ErrorActionPreference -eq 'Continue') 'The one-line installer must preserve the caller error preference'
+        Assert (-not (Test-Path Function:\Run-Tool)) 'The one-line installer must keep helper functions in its own scope'
+    }
 
     $state.bunVersion = '1.3.0'
     & $installer -Ref ''

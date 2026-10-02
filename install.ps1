@@ -1,6 +1,7 @@
 # Native Windows install: irm https://devswha.github.io/herdr-web-ui/install.ps1 | iex
 param([string]$Ref = $env:HERDR_WEB_UI_REF)
 
+& {
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT' -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
     throw 'herdr web ui supports Windows x64. Use install.sh on Linux or macOS.'
@@ -70,3 +71,4 @@ if ($server.running) {
     Write-Host ($status | Where-Object { $_ -match '^running ' })
 } else { Write-Host 'herdr web ui: starts with herdr. Open a new terminal and run: herdr' }
 Write-Host 'herdr web ui: open Phone setup in herdr for phone access.'
+}
