@@ -29,7 +29,7 @@ function herdr {
             @{ result = @{ plugins = $plugins } } | ConvertTo-Json -Depth 4 -Compress
         }
         'status server --json' { @{ running = $state.running } | ConvertTo-Json -Compress }
-        'plugin action invoke devswha.herdr-web-ui.start' { $state.started = $true; '{}' }
+        'plugin action invoke devswha.herdr-web-ui.start-windows' { $state.started = $true; '{}' }
         default {
             if ($args[0] -eq 'plugin' -and $args[1] -eq 'install') {
                 if ($state.failInstall) { $global:LASTEXITCODE = 1; return }

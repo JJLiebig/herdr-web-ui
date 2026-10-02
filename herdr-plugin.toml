@@ -23,33 +23,78 @@ command = ["bun", "run", "build"]
 # One-shot per herdr start: brings the bridge up if it is not already answering.
 [[startup]]
 command = ["bun", "scripts/plugin.ts", "start"]
+platforms = ["linux", "macos"]
+
+[[startup]]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "start"]
+platforms = ["windows"]
 
 [[actions]]
 id = "start"
 title = "Start herdr web ui"
 contexts = ["workspace"]
 command = ["bun", "scripts/plugin.ts", "start"]
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "start-windows"
+title = "Start herdr web ui"
+contexts = ["workspace"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "start"]
+platforms = ["windows"]
+
+[[actions]]
+id = "stop-windows"
+title = "Stop herdr web ui"
+contexts = ["workspace"]
+command = ["bun", "scripts/plugin.ts", "stop"]
+platforms = ["linux", "macos"]
 
 [[actions]]
 id = "stop"
 title = "Stop herdr web ui"
 contexts = ["workspace"]
-command = ["bun", "scripts/plugin.ts", "stop"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "stop"]
+platforms = ["windows"]
+
+[[actions]]
+id = "status-windows"
+title = "herdr web ui status"
+contexts = ["workspace"]
+command = ["bun", "scripts/plugin.ts", "status"]
+platforms = ["linux", "macos"]
 
 [[actions]]
 id = "status"
 title = "herdr web ui status"
 contexts = ["workspace"]
-command = ["bun", "scripts/plugin.ts", "status"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "status"]
+platforms = ["windows"]
 
 [[panes]]
 id = "phone"
 title = "Phone setup"
 placement = "zoomed"
 command = ["bun", "scripts/plugin.ts", "phone-setup"]
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "phone-windows"
+title = "Phone setup"
+placement = "zoomed"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "phone-setup"]
+platforms = ["windows"]
 
 [[actions]]
 id = "phone"
 title = "Phone setup"
 contexts = ["workspace"]
 command = ["herdr", "plugin", "pane", "open", "--plugin", "devswha.herdr-web-ui", "--entrypoint", "phone", "--placement", "zoomed", "--focus"]
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "phone-windows"
+title = "Phone setup"
+contexts = ["workspace"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "devswha.herdr-web-ui", "--entrypoint", "phone-windows", "--placement", "zoomed", "--focus"]
+platforms = ["windows"]

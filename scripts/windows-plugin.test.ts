@@ -1,14 +1,21 @@
 import { expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { socketAddress } from "../server/herdr/client.ts";
 import { windowsProcessTable } from "../server/windows-processes.ts";
 
 it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops its owned tree and restarts on Windows", async () => {
   const root = join(import.meta.dir, "..");
-  const scratch = mkdtempSync(join(tmpdir(), "herdr-windows-plugin-"));
+  const scratch = mkdtempSync(join(tmpdir(), "herdr windows plugin "));
+  const bin = join(scratch, ".bun", "bin");
+  mkdirSync(bin, { recursive: true });
+  copyFileSync(process.execPath, join(bin, "bun.exe"));
+  const manifest = Bun.TOML.parse(readFileSync(join(root, "herdr-plugin.toml"), "utf8")) as {
+    startup: { command: string[]; platforms: string[] }[];
+    actions: { id: string; command: string[]; platforms?: string[] }[];
+  };
   const socket = join(scratch, "herdr.sock");
   writeFileSync(socket, "test");
   // An isolated Herdr wire peer: no real sessions, panes, plugin registry or push keys.
@@ -33,11 +40,15 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
   mkdirSync(config);
   writeFileSync(join(config, ".env"), `HOST=127.0.0.1\nPORT=${port}\n`);
   const env = { ...process.env, HOME: scratch, USERPROFILE: scratch, APPDATA: join(scratch, "appdata"),
+    // A running Herdr without Bun on PATH: the manifest's real Windows launcher must find it.
+    PATH: ["taskkill", "powershell", "git"].map(tool => dirname(Bun.which(tool)!)).join(";"),
     HERDR_SOCKET: socket, HERDR_SOCKET_PATH: socket, HERDR_PLUGIN_ROOT: undefined,
     HERDR_PLUGIN_STATE_DIR: state, HERDR_PLUGIN_CONFIG_DIR: config, HERDR_WEB_STATE_DIR: join(scratch, "app-state"),
     HERDR_WEB_AUTO_UPDATE: "0", HERDR_WEB_TOKEN: "", HOST: "127.0.0.1", PORT: String(port) };
   const run = async (command: string) => {
-    const child = Bun.spawn([process.execPath, "scripts/plugin.ts", command], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+    const entry = command === "start" ? manifest.startup.find(entry => entry.platforms.includes("windows"))
+      : manifest.actions.find(entry => entry.id === `${command}-windows` && entry.platforms?.includes("windows"));
+    const child = Bun.spawn(entry!.command, { cwd: root, env, stdout: "pipe", stderr: "pipe" });
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(code, err + out + (existsSync(join(state, "server.log")) ? readFileSync(join(state, "server.log"), "utf8") : "")).toBe(0);
     return out;

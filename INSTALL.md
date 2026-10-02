@@ -70,6 +70,8 @@ takes about a minute.
   version too old) and how to fix it. `bun` or `node` not found means herdr runs build commands
   with **its own** environment: make sure they are on the `PATH` of the shell that started herdr
   (Bun installs to `~/.bun/bin`), ask the user to restart herdr from that shell, then retry.
+- On Windows, the plugin launcher reads the current user PATH and Bun's user-local directory,
+  so installing Bun while herdr is running does not require restarting herdr.
 - "installing over a locally linked plugin is refused": run `herdr plugin unlink devswha.herdr-web-ui`
   first.
 
@@ -78,6 +80,9 @@ Start it now. Otherwise it starts the next time herdr starts:
 ```bash
 herdr plugin action invoke devswha.herdr-web-ui.start
 ```
+
+On Windows, the start and stop action IDs are `devswha.herdr-web-ui.start-windows` and
+`devswha.herdr-web-ui.stop-windows`. The menu titles are the same on every platform.
 
 The command only queues the action and prints herdr's JSON acknowledgement; the action's own output
 (`herdr web ui listening at http://127.0.0.1:7317`, and possibly `no token set: ...`, expected for a

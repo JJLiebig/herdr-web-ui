@@ -58,7 +58,7 @@ if (-not $plugin.plugin_root) { throw 'herdr does not list the plugin after inst
 
 $server = Run-Tool herdr @('status', 'server', '--json') | ConvertFrom-Json
 if ($server.running) {
-    Run-Tool herdr @('plugin', 'action', 'invoke', "$pluginId.start") | Out-Null
+    Run-Tool herdr @('plugin', 'action', 'invoke', "$pluginId.start-windows") | Out-Null
     $script = Join-Path $plugin.plugin_root 'scripts\plugin.ts'
     $ready = $false
     for ($attempt = 0; $attempt -lt 25; $attempt++) {
