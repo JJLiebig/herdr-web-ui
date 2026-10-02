@@ -64,7 +64,7 @@ export async function runSupervisor(root = resolve(import.meta.dir, "..")) {
     if (stopping) throw new Error("Server is stopping");
     const bootId = crypto.randomUUID();
     const candidate = Bun.spawn([process.execPath, "server/index.ts"], {
-      cwd: release?.directory ?? root, stdin: "ignore", stdout: "inherit", stderr: "inherit",
+      cwd: release?.directory ?? root, windowsHide: true, stdin: "ignore", stdout: "inherit", stderr: "inherit",
       env: { ...process.env, HERDR_WEB_MANAGED: "1", HERDR_WEB_BOOT_ID: bootId,
         HERDR_WEB_STATE_DIR: appStateDir, HERDR_SOCKET: socketPath,
         HERDR_WEB_REVISION: release?.revision ?? "" },

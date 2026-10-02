@@ -9,7 +9,7 @@ export function activePluginScript(root: string, port: number, stateDir: string)
   try {
     const updates = updateStateDir(root, port, stateDir);
     const saved = JSON.parse(readFileSync(join(updates, "current.json"), "utf8"));
-    const revision = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8", timeout: 3000 });
+    const revision = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, windowsHide: true, encoding: "utf8", timeout: 3000 });
     if (revision.status !== 0 || saved.source_revision !== revision.stdout.trim() || typeof saved.directory !== "string") return own;
     const directory = realpathSync(saved.directory);
     if (dirname(directory) !== realpathSync(updates) || !basename(directory).startsWith("release-")) return own;

@@ -25,6 +25,9 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
   // An isolated Herdr wire peer: no real sessions, panes, plugin registry or push keys.
   const peer = createServer(connection => {
     let buffer = "";
+    connection.on("error", error => {
+      if ((error as NodeJS.ErrnoException).code !== "EPIPE") throw error; // the forced stop can close a reply's pipe
+    });
     connection.on("data", data => {
       buffer += data.toString();
       if (!buffer.includes("\n")) return;
@@ -54,7 +57,7 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
   const run = async (command: string, expectedCode = 0) => {
     const entry = command === "start" ? manifest.startup.find(entry => entry.platforms.includes("windows"))
       : manifest.actions.find(entry => entry.id === `${command}-windows` && entry.platforms?.includes("windows"));
-    const child = Bun.spawn(entry!.command, { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn(entry!.command, { cwd: root, windowsHide: true, env, stdout: "pipe", stderr: "pipe" });
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(code, err + out + (existsSync(join(state, "server.log")) ? readFileSync(join(state, "server.log"), "utf8") : "")).toBe(expectedCode);
     return out;
@@ -76,7 +79,7 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
     const owned = new Set([pid]);
     for (const parent of owned) for (const row of rows) if (row.parent === parent) owned.add(row.pid);
     expect(owned.size).toBeGreaterThanOrEqual(3);
-    await run("start"); // an already running plugin is preserved
+    for (let attempt = 0; attempt < 3; attempt++) await run("start"); // fast successful exits keep their exit code
     expect(Number(readFileSync(join(state, "server.pid"), "utf8"))).toBe(pid);
     const record = statSync(join(state, "server.pid"));
     try {
@@ -90,7 +93,7 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
     await run("start"); // forced Windows shutdown leaves a stale lock; restart must recover it
     expect((await fetch(`http://127.0.0.1:${port}/api/health`)).ok).toBe(true);
     await run("stop");
-    const unrelated = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 90000)"], { stdout: "ignore", stderr: "ignore" });
+    const unrelated = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 90000)"], { windowsHide: true, stdout: "ignore", stderr: "ignore" });
     try {
       writeFileSync(join(state, "server.pid"), String(unrelated.pid));
       await run("stop", 1);
@@ -105,6 +108,34 @@ it.skipIf(process.platform !== "win32")("starts after its launcher exits, stops 
       expect((await fetch(`http://127.0.0.1:${port}/api/health`)).ok).toBe(true);
       expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
       await run("stop");
+      // Simulate PID reuse after taskkill: the real CLI must leave this live fixture alone.
+      const preload = join(scratch, "stop-boundaries.ts");
+      for (const missingIdentity of [false, true]) {
+        writeFileSync(join(state, "server.pid"), String(unrelated.pid));
+        writeFileSync(preload, `
+          Bun.spawnSync = ({ cmd }) => {
+            if (cmd[0] !== "taskkill") throw new Error("unexpected termination");
+            console.log("simulated tree termination");
+            return { exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), pid: 0 };
+          };
+          let reads = 0;
+          Bun.spawn = (command) => {
+            if (command[0] !== "powershell") throw new Error("unexpected probe");
+            const first = reads++ === 0;
+            const row = { ProcessId: ${unrelated.pid}, ParentProcessId: 0, ExecutablePath: process.execPath,
+              CommandLine: '"' + process.execPath + '" "' + ${JSON.stringify(join(root, "server", "managed.ts"))} + '"',
+              ...(first ? { Started: 1 } : ${missingIdentity} ? {} : { Started: 2 }) };
+            return { exited: Promise.resolve(0), stdout: new Blob([JSON.stringify([row])]) };
+          };
+        `);
+        const stop = Bun.spawn([process.execPath, "--preload", preload, join(root, "scripts", "plugin.ts"), "stop"],
+          { cwd: root, windowsHide: true, env, stdout: "pipe", stderr: "pipe" });
+        const [out, err, code] = await Promise.all([new Response(stop.stdout).text(), new Response(stop.stderr).text(), stop.exited]);
+        expect(out).toContain("simulated tree termination");
+        expect(code, out + err).toBe(missingIdentity ? 1 : 0);
+        expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
+        expect(existsSync(join(state, "server.pid"))).toBe(missingIdentity);
+      }
     } finally {
       unrelated.kill(); await unrelated.exited;
       if (existsSync(join(state, "server.pid")) && Number(readFileSync(join(state, "server.pid"), "utf8")) === unrelated.pid) {

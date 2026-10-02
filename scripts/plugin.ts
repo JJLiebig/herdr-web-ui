@@ -61,7 +61,7 @@ function herdrConfigDir(): string | null {
   const herdr = Bun.which("herdr");
   if (herdr === null) return null;
   try {
-    const result = Bun.spawnSync([herdr, "plugin", "config-dir", "devswha.herdr-web-ui"], { stdout: "pipe", stderr: "ignore", timeout: 3000 });
+    const result = Bun.spawnSync([herdr, "plugin", "config-dir", "devswha.herdr-web-ui"], { windowsHide: true, stdout: "pipe", stderr: "ignore", timeout: 3000 });
     const dir = result.exitCode === 0 ? result.stdout.toString().trim() : "";
     return dir !== "" && ENV_FILES.some((name) => existsSync(join(dir, name))) ? dir : null;
   } catch {
@@ -250,6 +250,24 @@ async function stop(): Promise<number> {
       process.stderr.write(`could not stop herdr web ui: ${killed.error?.message ?? killed.stderr.trim()}\n`);
       return 1;
     }
+    const deadline = Date.now() + STOP_TIMEOUT_MS;
+    let exited = false;
+    while (Date.now() < deadline) {
+      try { process.kill(pid, 0); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") { exited = true; break; } }
+      const current = (await windowsProcessTable(Math.max(1, deadline - Date.now()))).find(row => row.pid === pid);
+      if (current?.started !== undefined && current.started !== owner.started) { exited = true; break; }
+      await Bun.sleep(100);
+    }
+    if (!exited) {
+      process.stderr.write("could not confirm herdr web ui stopped; its pid file was kept\n");
+      return 1;
+    }
+    // Never send another kill to a number Windows may have reassigned after taskkill.
+    if (existsSync(PID_FILE) && statSync(PID_FILE).mtimeMs === recordedAt
+      && Number(readFileSync(PID_FILE, "utf8").trim()) === pid) rmSync(PID_FILE);
+    process.stdout.write(`stopped herdr web ui (pid ${pid})\n`);
+    return 0;
   } else {
     try {
       process.kill(target, "SIGTERM");
@@ -354,7 +372,7 @@ async function phone(): Promise<number> {
     }
     say(`Publishing the app to your tailnet: ${access.serve_command}`);
     const [, ...args] = access.serve_command.split(" ");
-    const serve = Bun.spawn([binary, ...args.slice(0, 1), "--yes", ...args.slice(1)], { stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+    const serve = Bun.spawn([binary, ...args.slice(0, 1), "--yes", ...args.slice(1)], { windowsHide: true, stdin: "ignore", stdout: "inherit", stderr: "inherit" });
     const timer = setTimeout(() => serve.kill(), SERVE_TIMEOUT_MS);
     const code = await serve.exited;
     clearTimeout(timer);
@@ -391,7 +409,7 @@ async function phoneSetup(): Promise<number> {
   const stateDir = env["HERDR_WEB_STATE_DIR"] ?? join(env["XDG_CONFIG_HOME"] || join(homedir(), ".config"), "herdr-web-ui");
   const active = activePluginScript(ROOT, port, stateDir);
   if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) {
-    const child = Bun.spawn([process.execPath, active, "phone-setup"], { cwd: ROOT, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+    const child = Bun.spawn([process.execPath, active, "phone-setup"], { cwd: ROOT, windowsHide: true, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
     return await child.exited;
   }
   process.stdout.write(`Phone setup\n\nApp on this PC: ${link(origin)}\n`);
