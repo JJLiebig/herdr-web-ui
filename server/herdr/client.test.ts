@@ -92,6 +92,10 @@ describe("paneRead", () => {
           expect(read.format).toBe("text");
           expect(read.source).toBe(source);
         }
+        const raw = await paneRead({ paneId, source, lines: 400, stripAnsi: false });
+        expect(raw.text).toContain("A saved answer on the desktop.");
+        expect(raw.text).toContain("\x1b");
+        expect(raw.format).toBe("text");
       }
       expect(readFileSync(input, "utf8")).toBe("");
       expect((await paneRead({ paneId, source: "visible" })).text).toBe(before);
