@@ -20,6 +20,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   screen a split tab's pane picker no longer overlaps the tab's name.
   ([#392](https://github.com/devswha/herdr-web-ui/pull/392))
 
+- Reading a Codex conversation on a phone no longer scrolls the same idle agent's
+  terminal on the desktop as the conversation refreshes.
+  ([#393](https://github.com/devswha/herdr-web-ui/pull/393))
+
 ### Changed
 - **New session** is **New workspace**: the `+` on a PC's header, the button of an empty PC, the
   command palette action and the Settings → Shortcuts row create a herdr workspace, and say so
