@@ -64,6 +64,40 @@ describe("CODEX_HOME in a ps -E line", () => {
 });
 
 describe("Codex conversation records", () => {
+  it("hides memory citations before pairing display/model answers in either order", () => {
+    const citation = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[context]\n</citation_entries>\n<rollout_ids>\nthread-id\n</rollout_ids>\n</oai-mem-citation>";
+    for (const reverse of [false, true]) {
+      const pair = [message("assistant", `Done\n${citation}`, "final_answer"), event({ type: "agent_message", message: "Done" })];
+      if (reverse) pair.reverse();
+      expect(parseCodexTranscript(jsonl(...pair))).toEqual([
+        { role: "assistant", ts, end_ts: ts, parts: [{ kind: "text", text: "Done", phase: "final_answer" }] },
+      ]);
+    }
+  });
+
+  it("hides multiple and unfinished memory blocks without dropping surrounding prose", () => {
+    expect(parseCodexTranscript(jsonl(
+      message("assistant", "Before<oai-mem-citation>one</oai-mem-citation> after<oai-mem-citation>two</oai-mem-citation>", "final_answer"),
+      event({ type: "agent_message", message: "Next\n<oai-mem-citation>unfinished" }),
+      message("assistant", "<oai-mem-citation>metadata only</oai-mem-citation>"),
+    ))[0]?.parts).toEqual([
+      { kind: "text", text: "Before after", phase: "final_answer" },
+      { kind: "text", text: "Next" },
+    ]);
+    expect(parseCodexTranscript(jsonl(message("assistant", "<oai-mem-citation>unfinished")))).toEqual([]);
+  });
+
+  it("preserves memory markup quoted by a user or returned by a tool", () => {
+    const text = "<oai-mem-citation>quoted metadata</oai-mem-citation>";
+    const turns = parseCodexTranscript(jsonl(
+      message("user", text),
+      item({ type: "function_call", call_id: "read", name: "read", arguments: "{}" }),
+      item({ type: "function_call_output", call_id: "read", output: text }),
+    ));
+    expect(turns[0]?.parts).toEqual([{ kind: "text", text }]);
+    expect(turns[1]?.parts[0]).toMatchObject({ kind: "tool", output: text });
+  });
+
   it("hides injected context, metadata and developer messages while preserving the real request", () => {
     const turns = parseCodexTranscript(jsonl(
       { type: "session_meta", payload: { base_instructions: "internal system prompt" } },

@@ -106,7 +106,8 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
     return turn;
   };
   const message = (role: "user" | "assistant", text: string, source: string, ts: string, phase?: "commentary" | "final_answer", images: ConversationPart[] = []): void => {
-    const body = role === "user" ? questionReply(text) ?? text : text;
+    const body = role === "user" ? questionReply(text) ?? text
+      : text.replace(/<oai-mem-citation>[\s\S]*?(?:<\/oai-mem-citation>|$)/g, "").trimEnd();
     if (!body.trim() && images.length === 0) return;
     const duplicate = messages.slice(-8).reverse().find((other) => !other.paired && other.role === role && other.text === body
       && other.source !== source && (other.ts === ts || Math.abs(Date.parse(other.ts) - Date.parse(ts)) <= 1000));
