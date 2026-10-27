@@ -7,6 +7,8 @@
 export const MACHINES_ZH: Record<string, string> = {
   "Keep this dialog open until the PC connects.": "请保持此对话框打开，直到 PC 连接成功。",
   "Waiting for Windows sign-in": "正在等待 Windows 登录",
+  "Windows desktop startup failed": "Windows 桌面启动失败",
+  "Windows desktop startup failed on {name}{others}.": "{name} 上的 Windows 桌面启动失败{others}。",
   "Sign in to Windows on this PC; Ovis will reconnect automatically.": "在此 PC 上登录 Windows 后，Ovis 将自动重新连接。",
   "Review startup options": "查看启动选项",
   "{name} is waiting for Windows sign-in{others}.": "{name} 正在等待 Windows 登录{others}。",

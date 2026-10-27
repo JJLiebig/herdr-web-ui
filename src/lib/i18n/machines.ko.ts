@@ -7,6 +7,8 @@
 export const MACHINES_KO: Record<string, string> = {
   "Keep this dialog open until the PC connects.": "PC가 연결될 때까지 이 대화 상자를 열어 두세요.",
   "Waiting for Windows sign-in": "Windows 로그인 대기 중",
+  "Windows desktop startup failed": "Windows 데스크톱에서 시작하지 못했습니다",
+  "Windows desktop startup failed on {name}{others}.": "{name}의 Windows 데스크톱에서 시작하지 못했습니다{others}.",
   "Sign in to Windows on this PC; Ovis will reconnect automatically.": "이 PC에서 Windows에 로그인하면 Ovis가 자동으로 다시 연결합니다.",
   "Review startup options": "시작 옵션 검토",
   "{name} is waiting for Windows sign-in{others}.": "{name}에서 Windows 로그인을 기다리고 있습니다{others}.",

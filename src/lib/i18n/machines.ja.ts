@@ -7,6 +7,8 @@
 export const MACHINES_JA: Record<string, string> = {
   "Keep this dialog open until the PC connects.": "PC が接続されるまで、このダイアログを開いたままにしてください。",
   "Waiting for Windows sign-in": "Windows へのサインインを待機中",
+  "Windows desktop startup failed": "Windows デスクトップでの起動に失敗しました",
+  "Windows desktop startup failed on {name}{others}.": "{name} の Windows デスクトップでの起動に失敗しました{others}。",
   "Sign in to Windows on this PC; Ovis will reconnect automatically.": "この PC で Windows にサインインすると、Ovis が自動的に再接続します。",
   "Review startup options": "起動方法を確認",
   "{name} is waiting for Windows sign-in{others}.": "{name} は Windows へのサインインを待機しています{others}。",

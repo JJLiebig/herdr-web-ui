@@ -594,6 +594,80 @@ describe("setup job labels", () => {
     } finally { updates.mockRestore(); f.close(); }
   }, 10_000);
 
+  for (const automatic of [false, true]) for (const refused of [false, true]) it(`waits for delayed Windows startup status during ${automatic ? "automatic update" : "initial setup"} (${refused ? "scheduler failure" : "sign-in"})`, async () => {
+    // Given a launcher which publishes its result only at its 30-second deadline.
+    const f = windowsSetup(!automatic);
+    if (!automatic) f.manager["machines"].delete("windows");
+    else f.runtime.machine.state = "error";
+    let elapsed = 0;
+    const result = refused ? "Task registration denied" : "Waiting for Windows sign-in on this PC.";
+    const action = refused ? "windows_start_failed" : "windows_login";
+    const sleep = spyOn(Bun, "sleep").mockImplementation(async (ms) => { elapsed += Number(ms); });
+    const notice = spyOn(windowsHost, "startupNotice").mockImplementation(async () => elapsed >= 30_000 ? result : null);
+    try {
+      // When setup or an unattended update starts that launcher.
+      const job = automatic ? f.manager.updateBridge("windows", true) : f.manager.setup({ destination: "pc" });
+      if (!automatic) { await within(f.approval.promise); f.manager.action(job.id, { action: "approve" }); }
+      const state = f.manager["jobs"].get(job.id);
+      if (!state) throw new Error("Setup job missing");
+      await within(Promise.race([f.waiting.promise, state.finished]));
+      // Then startup options survive the delay; only a sign-in wait retries in the background.
+      expect(job.action_required).toBe(action);
+      expect(elapsed).toBeGreaterThanOrEqual(30_000);
+      if (automatic) {
+        expect(f.runtime.machine).toMatchObject({ state: refused ? "error" : "reconnecting", action_required: action, error: result });
+        if (refused) expect(f.runtime.retry).toBeUndefined();
+        else expect(f.runtime.retry).toBeDefined();
+      } else expect(job.phase).toBe("starting");
+    } finally { sleep.mockRestore(); notice.mockRestore(); f.close(); }
+  });
+
+  for (const headless of [false, true]) it(`restores saved Windows retries when ${headless ? "headless startup fails" : "SSH drops during sign-in waiting"}`, async () => {
+    // Given a saved PC whose startup review has replaced its background connection.
+    const f = windowsSetup();
+    if (!headless) f.runtime.machine.state = "disconnected";
+    const failure = headless ? "Headless launch failed" : "SSH connection ended";
+    try {
+      const job = f.manager.setup({ destination: "pc", machine_id: "windows" });
+      await within(f.approval.promise);
+      f.manager.action(job.id, { action: "approve" });
+      await within(f.waiting.promise);
+      const failed = headless
+        ? spyOn(windowsHost, "start").mockRejectedValue(new Error(failure))
+        : spyOn(windowsHost, "descriptors").mockRejectedValue(new Error(failure));
+      try {
+        // When the waiting connection drops, or its explicit headless launch fails.
+        if (headless) f.manager.action(job.id, { action: "start_headless" });
+        f.resume.resolve();
+        await f.manager["jobs"].get(job.id)?.finished;
+        // Then the failure stays visible while the enabled saved PC retries.
+        expect(job.phase).toBe("failed");
+        expect(f.runtime.machine).toMatchObject({ state: "reconnecting", error: failure, action_required: null });
+        expect(f.runtime.retry).toBeDefined();
+      } finally { failed.mockRestore(); }
+    } finally { f.close(); }
+  });
+
+  for (const automatic of [false, true]) it(`stops retrying scheduler failures during ${automatic ? "automatic update" : "background reconnection"}`, async () => {
+    // Given a real startup-status reader receiving a Task Scheduler failure.
+    const startupNotice = windowsHost.startupNotice;
+    const f = windowsSetup(!automatic);
+    const failure = "Task registration denied (0x80070005)";
+    windowsHost.startupNotice = startupNotice;
+    const reader = spyOn(SshConnection.prototype, "runPowerShell").mockResolvedValue(`interactive_failed: ${failure}`);
+    try {
+      // When an unattended connection encounters the scheduler refusal.
+      if (automatic) {
+        const job = f.manager.updateBridge("windows", true);
+        await f.manager["jobs"].get(job.id)?.finished;
+        expect(job.action_required).toBe("windows_start_failed");
+      } else await f.manager["reconnect"](f.runtime);
+      // Then it offers startup review with the actual failure, without endless retries.
+      expect(f.runtime.machine).toMatchObject({ state: "error", action_required: "windows_start_failed", error: failure });
+      expect(f.runtime.retry).toBeUndefined();
+    } finally { reader.mockRestore(); f.close(); }
+  });
+
   it("offers one-time headless consent when the Windows scheduler refuses startup", async () => {
     // Given a scheduler failure transported through the real startup-status reader.
     const startupNotice = windowsHost.startupNotice;
@@ -614,7 +688,7 @@ describe("setup job labels", () => {
       f.manager.action(job.id, { action: "approve" });
       await within(f.waiting.promise, "scheduler failure did not offer startup choices");
       expect(job.step).toBe(schedulerError);
-      expect(job.action_required).toBe("windows_login");
+      expect(job.action_required).toBe("windows_start_failed");
       // When the user explicitly chooses a headless start.
       f.manager.action(job.id, { action: "start_headless" });
       f.resume.resolve();

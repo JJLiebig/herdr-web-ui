@@ -22,6 +22,7 @@ import { detectHost, HERDR_INSTALL_CMD, installLockOwner, type RemoteHost } from
 import { REVISION, type UpdateStatus } from "../shared/update.ts";
 import { discard, readCappedJson, REMOTE_LIMITS } from "./remote-json.ts";
 import { SshConnection, sshClient } from "./ssh.ts";
+import { WAITING_FOR_WINDOWS_LOGIN } from "./windows-herdr-start.ts";
 
 interface StoredMachine { id: string; name: string; target: SshTarget; enabled: boolean; snapshot?: SessionSnapshot | null }
 interface Runtime {
@@ -553,7 +554,7 @@ export class MachineManager {
     // a PC saved in herdr is named by its catalog (any length); a name sent with it is not read
     const name = existing?.machine.herdr_profile_id ? undefined : request.name;
     if (name !== undefined && (typeof name !== "string" || name.length > 100)) throw new Error("PC name must be at most 100 characters");
-    const waiting = existing && [...this.jobs.values()].find((j) => j.public.machine_id === existing.machine.id && j.public.phase === "starting" && j.public.action_required === "windows_login");
+    const waiting = existing && [...this.jobs.values()].find((j) => j.public.machine_id === existing.machine.id && j.public.phase === "starting" && (j.public.action_required === "windows_login" || j.public.action_required === "windows_start_failed"));
     if (waiting && !request.update_remote && sameSshSession(target, waiting.public.target) && target.identity_file === waiting.public.target.identity_file) return waiting.public;
     if ([...this.jobs.values()].filter((j) => !["connected", "failed", "cancelled"].includes(j.public.phase)).length >= 4) throw new Error("Finish or cancel the current connection jobs first");
     if (request.machine_id && !existing) throw new Error("PC not found");
@@ -654,7 +655,8 @@ export class MachineManager {
         // A setup at another SSH address that did not connect there leaves the PC as it was, trying its own address
         // again when it is enabled: what that setup met there is not this PC's, and its dialog says how it ended (#2075).
         if (job.public.phase === "cancelled" || job.timedOut) {
-          if (ownsRuntime && (job.update || moving || resumeRetry || runtime.machine.action_required === "windows_login") && existing && runtime.machine.enabled && !this.stopped) {
+          if (ownsRuntime && !moving && runtime.machine.action_required === "windows_start_failed") { runtime.machine.state = "error"; this.emit(); }
+          else if (ownsRuntime && (job.update || moving || resumeRetry || runtime.machine.action_required === "windows_login") && existing && runtime.machine.enabled && !this.stopped) {
             runtime.machine.error = null; runtime.machine.action_required = null;
             if (job.update && !moving && !job.timedOut) runtime.updateCancelled = true;
             this.retryLater(runtime);
@@ -665,7 +667,7 @@ export class MachineManager {
           job.public.error = error;
           if (moving) { if (ownsRuntime && runtime.machine.enabled && !this.stopped) { runtime.machine.error = null; runtime.machine.action_required = null; this.retryLater(runtime); } }
           else if (ownsRuntime && existing && runtime.machine.enabled && !this.stopped && e instanceof MachineActionRequired && e.action === "windows_login") { runtime.machine.error = error; runtime.machine.action_required = e.action; this.retryLater(runtime); }
-          else if (ownsRuntime && unreachable && runtime.machine.enabled) { runtime.machine.error = error; runtime.machine.action_required = null; this.retryLater(runtime); }
+          else if (ownsRuntime && existing && runtime.machine.enabled && !this.stopped && !(e instanceof MachineActionRequired) && (unreachable || resumeRetry || runtime.machine.action_required === "windows_login")) { runtime.machine.error = error; runtime.machine.action_required = null; this.retryLater(runtime); }
           // a failed bridge update on a PC that answered keeps its button: the bridge is still
           // out of date, and the error says why this attempt failed (a password needed, …)
           else if (ownsRuntime) { runtime.machine.state = "error"; runtime.machine.error = error; runtime.machine.action_required = e instanceof MachineActionRequired ? e.action : job.update && existing ? "update_bridge" : null; }
@@ -716,7 +718,7 @@ export class MachineManager {
     if (!job) throw new Error("Setup job not found");
     if (action.action === "cancel") { this.cancelJob(id); return; }
     if (action.action === "start_headless") {
-      if (job.abort.signal.aborted || job.public.phase !== "starting" || job.public.action_required !== "windows_login") throw new Error("This PC is not waiting for Windows sign-in");
+      if (job.abort.signal.aborted || job.public.phase !== "starting" || (job.public.action_required !== "windows_login" && job.public.action_required !== "windows_start_failed")) throw new Error("This PC is not waiting for Windows sign-in");
       job.public.action_required = null;
       job.public.step = "Starting without Windows sign-in…";
       job.headlessStart = true;
@@ -919,16 +921,23 @@ export class MachineManager {
         const headless = job?.headlessStart === true;
         if (job) job.headlessStart = false;
         await host.start(ssh, { session, herdrPath, inspection, ...(headless ? { headless: true } : {}) });
-        for (let i = 0; i < 40; i++) {
+        notice = null;
+        // Windows allows 30 seconds for the desktop launcher, then 30 for herdr
+        // readiness. Leave a further ten seconds for bridge registration.
+        const pollLimit = host.kind === "windows" ? 280 : 40;
+        for (let i = 0; i < pollLimit; i++) {
           if (job?.abort.signal.aborted || runtime.generation !== generation || this.stopped) throw new Error("Setup cancelled");
           descriptor = (await host.descriptors(ssh)).find((d) => d.socket_path === expectedSocket && d.pid !== stalePid);
           if (descriptor) break;
+          if (!headless) notice = await host.startupNotice?.(ssh, session) ?? null;
+          if (notice) break;
           await Bun.sleep(250);
         }
-        if (!descriptor) notice = await host.startupNotice?.(ssh, session) ?? null;
+        if (!descriptor && !headless && !notice) notice = await host.startupNotice?.(ssh, session) ?? null;
+        const startupAction = notice === WAITING_FOR_WINDOWS_LOGIN ? "windows_login" : "windows_start_failed";
         // An unattended update has installed its bundle. Waiting for a person belongs to
         // reconnection, not the global update queue or one of the four setup slots.
-        if (notice && job?.auto && job.update) throw new MachineActionRequired(notice, "windows_login");
+        if (notice && job?.auto && job.update) throw new MachineActionRequired(notice, startupAction);
         if (notice && job) {
           if (!waitingForLogin) {
             waitingForLogin = true;
@@ -937,19 +946,23 @@ export class MachineManager {
             job.timer.unref();
           }
           if (!job.headlessStart) {
-            job.public.action_required = "windows_login";
-            if (!moving) runtime.machine.action_required = "windows_login";
+            job.public.action_required = startupAction;
+            if (!moving) { runtime.machine.action_required = startupAction; runtime.machine.error = notice; }
             this.stage(job, "starting", notice);
           }
-          await this.pause(job.abort.signal);
+          do {
+            await this.pause(job.abort.signal);
+            if (job.abort.signal.aborted || runtime.generation !== generation || this.stopped) throw new Error("Setup cancelled");
+            // A scheduler refusal needs a decision, not another automatic launch.
+          } while (job.public.action_required === "windows_start_failed");
         }
       } while (!descriptor && notice && job);
       if (!descriptor) {
-        if (notice) throw new MachineActionRequired(notice, "windows_login");
+        if (notice) throw new MachineActionRequired(notice, notice === WAITING_FOR_WINDOWS_LOGIN ? "windows_login" : "windows_start_failed");
         throw new Error(`Bridge did not start. Check ${host.logHint} on the PC.`);
       }
-      if (job?.public.action_required === "windows_login") job.public.action_required = null;
-      if (runtime.machine.action_required === "windows_login") runtime.machine.action_required = null;
+      if (job?.public.action_required === "windows_login" || job?.public.action_required === "windows_start_failed") job.public.action_required = null;
+      if (runtime.machine.action_required === "windows_login" || runtime.machine.action_required === "windows_start_failed") runtime.machine.action_required = null;
     }
     learnServer(descriptor);
     let verified: Awaited<ReturnType<MachineManager["verify"]>>;

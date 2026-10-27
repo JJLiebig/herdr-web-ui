@@ -5,3 +5,6 @@
   limitations shown before that one start. Existing herdr servers are reused without restarting
   their panes. Signing out of Windows ends a desktop-started herdr and its panes; lock the PC
   instead. SSH disconnects and bridge updates leave them running.
+- Slow Windows launchers keep their startup options through the launch deadline. Failed startup
+  reviews restore saved PCs' reconnection attempts; Task Scheduler failures show their own error
+  instead of a sign-in instruction and stop background retries until startup options are reviewed.

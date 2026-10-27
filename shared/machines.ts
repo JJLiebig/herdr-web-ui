@@ -24,7 +24,7 @@ export interface Machine {
   enabled: boolean;
   state: MachineState;
   error: string | null;
-  /** Attention needed; windows_login continues retrying while the user may choose headless startup. */
+  /** Attention needed; windows_login retries, windows_start_failed waits for a startup decision. */
   action_required?: MachineAction | null;
   /** a bridge update running for this PC right now (in the background, or from its dialog) */
   updating?: MachineUpdate | null;
@@ -84,7 +84,7 @@ export interface HerdrIdentity {
   /** without attach, the terminal lens shows the pane's screen repainted a few times a second (server/mirror.ts) */
   terminal_mirror?: boolean;
 }
-export type MachineAction = "connect" | "update_bridge" | "setup" | "bridge_conflict" | "windows_login";
+export type MachineAction = "connect" | "update_bridge" | "setup" | "bridge_conflict" | "windows_login" | "windows_start_failed";
 /** `ovis`: the PC's own Ovis updates itself (Machine.remote_ovis); absent for a bridge this app installs */
 export interface MachineUpdate { job_id: string; step: string; progress: SetupProgress | null; ovis?: boolean }
 /**

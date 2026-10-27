@@ -28,7 +28,8 @@ export function MachineDialog({ machine, updateRemote = false, onClose, onConnec
   const finished = !!job && ["failed", "cancelled", "connected"].includes(job.phase);
   const secretAllowed = window.isSecureContext;
   const needsBridgeUpdate = job?.phase === "failed" && job.action_required === "update_bridge";
-  const waitingForLogin = job?.phase === "starting" && job.action_required === "windows_login";
+  const startupFailed = job?.phase === "starting" && job.action_required === "windows_start_failed";
+  const waitingForLogin = job?.phase === "starting" && (job.action_required === "windows_login" || startupFailed);
   const keepOpen = job?.windows_startup === true;
   // the PC's own Ovis, older than this app: the update asks it to update itself, or it cannot be from here
   const own = job?.remote_ovis ?? (job || !machine ? null : ownOvisAction(machine));
@@ -67,7 +68,7 @@ export function MachineDialog({ machine, updateRemote = false, onClose, onConnec
   };
   const inheritedStarted = useRef(false);
   useEffect(() => {
-    if ((!machine?.herdr_profile_id && machine?.action_required !== "windows_login") || inheritedStarted.current) return;
+    if ((!machine?.herdr_profile_id && machine?.action_required !== "windows_login" && machine?.action_required !== "windows_start_failed") || inheritedStarted.current) return;
     inheritedStarted.current = true;
     void begin();
   }, []);
@@ -93,7 +94,7 @@ export function MachineDialog({ machine, updateRemote = false, onClose, onConnec
         <p className="field-hint">{t("Uses the web server account’s SSH config and ssh-agent. Agent CLI tools and logins use the environment on the target PC.")}</p>
         </>}
       </form>}
-      {job && job.challenge?.kind !== "host_key" && <div className="machine-progress" role="status">{waitingForLogin ? <strong>{t("Waiting for Windows sign-in")}</strong> : running && job.progress ? <BridgeUpdateProgress update={{ job_id: job.id, step: job.step, progress: job.progress }} /> : <strong>{job.step === "Starting without Windows sign-in…" ? t("Starting without Windows sign-in…") : job.step}</strong>}{waitingForLogin && job.step !== "Waiting for Windows sign-in on this PC." && <p>{machineErrorText(job.step, t)}</p>}{job.error && <p>{machineErrorText(job.error, t)}</p>}{job.ssh_output && <SshOutput text={job.ssh_output} />}</div>}
+      {job && job.challenge?.kind !== "host_key" && <div className="machine-progress" role="status">{waitingForLogin ? <strong>{t(startupFailed ? "Windows desktop startup failed" : "Waiting for Windows sign-in")}</strong> : running && job.progress ? <BridgeUpdateProgress update={{ job_id: job.id, step: job.step, progress: job.progress }} /> : <strong>{job.step === "Starting without Windows sign-in…" ? t("Starting without Windows sign-in…") : job.step}</strong>}{waitingForLogin && job.step !== "Waiting for Windows sign-in on this PC." && <p>{machineErrorText(job.step, t)}</p>}{job.error && <p>{machineErrorText(job.error, t)}</p>}{job.ssh_output && <SshOutput text={job.ssh_output} />}</div>}
       {waitingForLogin && <p className="field-hint">{t("Starting without Windows sign-in can break Codex sandbox commands, and desktop-control tools may be unavailable. This choice applies to one start.")}</p>}
       {waitingForLogin && <p className="field-hint">{t("Signing out of Windows ends herdr and its panes; lock the PC instead.")}</p>}
       {needsBridgeUpdate && <p className="field-hint">{t(ownUpdate ? "It updates itself through its own updater, then this PC reconnects; herdr sessions keep running." : "This PC runs a bridge from a different version of Ovis. Update it to reconnect; herdr sessions keep running.")}</p>}
