@@ -53,6 +53,7 @@ watch(${JSON.stringify(root)}, () => { if (existsSync(${JSON.stringify(stopPath)
 writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({pid:process.pid, secret:process.env.OVIS_START_TEST_SECRET, args:process.argv.slice(2), session:session[0]}));
 `);
   process.env["OVIS_START_TEST_SECRET"] = sentinel;
+  const failures: unknown[] = [];
   try {
     const started = await startInteractiveWindowsHerdr(process.execPath, [script, "argument with spaces & 한글"], join(root, "herdr.log"));
     if (started === "waiting_login") {
@@ -67,7 +68,8 @@ writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({pid:process.pid, se
       expect(() => process.kill(child.pid, 0)).not.toThrow();
     }
     expect(readdirSync(root).filter((name) => name.startsWith("herdr-start-"))).toEqual([]);
-  } finally {
+  } catch (error) { failures.push(error); }
+  try {
     clearTimeout(deadline);
     const closed = new Promise<void>((resolve) => watcher.once("close", resolve));
     watcher.close();
@@ -83,7 +85,9 @@ writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({pid:process.pid, se
         await Bun.sleep(25);
       }
     }
-  }
+  } catch (error) { failures.push(error); }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "Desktop startup test and cleanup failed");
 }, 60_000);
 
 it.skipIf(!onWindows)("stops skill discovery at the user's home whatever its letter case", () => {
