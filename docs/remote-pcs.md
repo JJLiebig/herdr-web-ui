@@ -51,11 +51,15 @@ herdr has no `terminal attach` on Windows yet ([herdrdev/herdr#4821](https://git
 After a reboot, an approved Windows PC keeps reconnecting until the SSH account signs in to Windows.
 A locked desktop still counts as signed in. Ovis starts herdr only for a pending connection; it adds
 no permanent logon task, stores no Windows password and does not request administrator privileges.
+Signing out of Windows ends a desktop-started herdr, its panes and the agents running in them.
+Lock the PC instead to keep that work running. SSH disconnects and bridge updates do not end it.
 
 If the PC must run without a desktop login, choose **Review startup options** and then
 **Start without Windows sign-in**. The warning applies to that one start: Codex commands that need
 its private-desktop sandbox can fail in this headless Windows session, and desktop-control tools may
 be unavailable. Ovis does not disable an agent's sandbox. A later cold start waits for sign-in again.
+If Windows Task Scheduler cannot start herdr, the startup options show its error and offer the same
+one-time headless choice.
 
 An existing herdr server is always reused. Signing in later does not move an already-running
 headless server into the desktop session, and Ovis never restarts it or its panes automatically.

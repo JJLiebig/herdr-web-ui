@@ -11,6 +11,8 @@ export const MACHINES_KO: Record<string, string> = {
   "Review startup options": "시작 옵션 검토",
   "{name} is waiting for Windows sign-in{others}.": "{name}에서 Windows 로그인을 기다리고 있습니다{others}.",
   "Start without Windows sign-in": "Windows 로그인 없이 시작",
+  "Starting without Windows sign-in…": "Windows 로그인 없이 시작 중…",
+  "Signing out of Windows ends herdr and its panes; lock the PC instead.": "Windows에서 로그아웃하면 herdr와 모든 패인이 종료됩니다. 대신 PC를 잠그세요.",
   "Starting without Windows sign-in can break Codex sandbox commands, and desktop-control tools may be unavailable. This choice applies to one start.": "Windows 로그인 없이 시작하면 Codex 샌드박스 명령이 실패할 수 있고 데스크톱 제어 도구를 사용하지 못할 수 있습니다. 이 선택은 한 번의 시작에만 적용됩니다.",
   "Expand {name}": "{name} 펼치기",
   "Collapse {name}": "{name} 접기",

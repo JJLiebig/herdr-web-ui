@@ -328,6 +328,8 @@ function MachineActionNotice({ machine, onSetup }: { machine: Machine; onSetup(m
   </div>;
   if (machine.action_required === "windows_login") return <div className="machine-action" role="status">
     <p className="machine-action-text"><strong>{t("Waiting for Windows sign-in")}</strong><span>{t("Sign in to Windows on this PC; Ovis will reconnect automatically.")}</span></p>
+    {machine.error && machine.error !== "Waiting for Windows sign-in on this PC." && <p className="machine-action-reason">{machineErrorText(machine.error, t)}</p>}
+    <p className="field-hint">{t("Signing out of Windows ends herdr and its panes; lock the PC instead.")}</p>
     <button type="button" className="btn" onClick={() => onSetup(machine, false)}>{t("Review startup options")}</button>
   </div>;
   // another app's bridge runs on this PC: neither an update from here nor an approval fixes that,

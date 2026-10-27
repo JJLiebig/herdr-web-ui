@@ -11,6 +11,8 @@ export const MACHINES_ZH: Record<string, string> = {
   "Review startup options": "查看启动选项",
   "{name} is waiting for Windows sign-in{others}.": "{name} 正在等待 Windows 登录{others}。",
   "Start without Windows sign-in": "不登录 Windows 直接启动",
+  "Starting without Windows sign-in…": "正在不登录 Windows 的情况下启动…",
+  "Signing out of Windows ends herdr and its panes; lock the PC instead.": "注销 Windows 会结束 herdr 及其所有窗格；请改为锁定 PC。",
   "Starting without Windows sign-in can break Codex sandbox commands, and desktop-control tools may be unavailable. This choice applies to one start.": "不登录 Windows 直接启动可能导致 Codex 沙箱命令失败，桌面控制工具也可能无法使用。此选择仅适用于本次启动。",
   "Expand {name}": "展开 {name}",
   "Collapse {name}": "折叠 {name}",
