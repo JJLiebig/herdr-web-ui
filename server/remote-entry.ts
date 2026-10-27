@@ -37,6 +37,7 @@ function staleWindowsMarker(path: string): boolean {
 const descriptor = descriptorPath();
 mkdirSync(dirname(descriptor), { recursive: true, mode: 0o700 });
 async function startBridge(): Promise<void> {
+if (windows) rmSync(windowsStartupStatus(dirname(descriptor), session), { force: true });
 // the lock records its owner's birth: a PID that now belongs to another process does not block this start
 const lock = acquireOwnerDirectory(descriptor + ".lock", { running: "Another bridge is starting; retry shortly", starting: "Another bridge is starting; retry shortly" });
 try {
@@ -60,10 +61,15 @@ try {
     if (windows) {
       const registry = dirname(descriptor);
       const status = windowsStartupStatus(registry, session);
-      rmSync(status, { force: true });
       if (process.env["OVIS_WINDOWS_HEADLESS_START"] !== "1") {
-        if (await startInteractiveWindowsHerdr(herdr, args, log) === "waiting_login") {
-          writeFileSync(status, "waiting_login");
+        try {
+          if (await startInteractiveWindowsHerdr(herdr, args, log) === "waiting_login") {
+            writeFileSync(status, "waiting_login");
+            return;
+          }
+        } catch (error) {
+          if (!(error instanceof Error)) throw error;
+          writeFileSync(status, `interactive_failed: ${error.message}`);
           return;
         }
       } else await startHeadlessWindowsHerdr(herdr, args, log);

@@ -476,6 +476,156 @@ describe("setup job labels", () => {
     }
   });
 
+  function windowsSetup(bundleReady = true) {
+    const { manager } = fixture("cancelled", "Cancelled");
+    manager["jobs"].delete("job");
+    const runtime = manager["runtime"]({ id: "windows", name: "pc", kind: "ssh", enabled: true, state: "reconnecting", action_required: "windows_login", target: { destination: "pc" }, snapshot: null, error: null });
+    manager["machines"].set("windows", runtime);
+    manager["retryLater"](runtime);
+    const approval = Promise.withResolvers<void>(), waiting = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>();
+    const wait = manager["wait"].bind(manager);
+    manager["wait"] = (job) => { const answer = wait(job); approval.resolve(); return answer; };
+    manager["pause"] = async (signal) => {
+      waiting.resolve();
+      if (signal?.aborted) return;
+      await new Promise<void>((resolve) => {
+        const done = () => resolve();
+        signal?.addEventListener("abort", done, { once: true });
+        void resume.promise.then(() => { signal?.removeEventListener("abort", done); resolve(); });
+      });
+    };
+    const mocks = [
+      spyOn(SshConnection.prototype, "start").mockResolvedValue(undefined),
+      spyOn(SshConnection.prototype, "run").mockRejectedValue(new Error("no sh on Windows")),
+      spyOn(SshConnection.prototype, "close").mockImplementation(() => {}),
+      spyOn(windowsHost, "inspect").mockResolvedValue({ platform: "win32-x64", home: "C:\\Users\\u", herdrPath: "C:\\herdr.exe", expectedSocket: "C:\\socket", bundleReady, bundleOlder: !bundleReady, descriptors: [], runtimeDir: "C:\\runtime", registryDir: "C:\\registry" }),
+      spyOn(windowsHost, "herdrVersion").mockResolvedValue("herdr 0.9.5"),
+      spyOn(windowsHost, "installBundle").mockResolvedValue(undefined),
+      spyOn(windowsHost, "start").mockResolvedValue(undefined),
+      spyOn(windowsHost, "descriptors").mockResolvedValue([]),
+      spyOn(windowsHost, "startupNotice").mockResolvedValue("Waiting for Windows sign-in on this PC."),
+      spyOn(Bun, "sleep").mockResolvedValue(undefined),
+    ];
+    return { manager, runtime, approval, waiting, resume, close: () => { manager.stop(); resume.resolve(); for (const mock of mocks) mock.mockRestore(); } };
+  }
+
+  for (const phase of ["approval", "starting"] as const) it(`resumes a saved Windows retry when startup review is cancelled during ${phase}`, async () => {
+    // Given a dialog which has pre-empted a saved PC's background reconnection.
+    const f = windowsSetup();
+    try {
+      const job = f.manager.setup({ destination: "pc", machine_id: "windows" });
+      await within(f.approval.promise);
+      if (phase === "starting") {
+        f.manager.action(job.id, { action: "approve" });
+        await within(f.waiting.promise);
+      }
+      // When Cancel connection or dialog unmount cancels that job.
+      f.manager.action(job.id, { action: "cancel" });
+      await f.manager["jobs"].get(job.id)?.finished;
+      // Then background reconnection is restored, without headless consent.
+      expect(job.phase).toBe("cancelled");
+      expect(f.runtime.machine.state).toBe("reconnecting");
+      expect(f.runtime.retry).toBeDefined();
+      expect(f.manager["jobs"].get(job.id)?.headlessStart).toBe(false);
+    } finally { f.close(); }
+  });
+
+  for (const bundleReady of [true, false]) it(`resumes a saved Windows retry when sign-in expires ${bundleReady ? "without installation" : "after installation clears the setup deadline"}`, async () => {
+    // Given a setup waiting for sign-in, with or without an installation stage.
+    const f = windowsSetup(bundleReady);
+    const deadlines = new Map<number, () => void>();
+    const set = globalThis.setTimeout, clear = globalThis.clearTimeout;
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(new Proxy(set, {
+      apply(target, _receiver, [fn, delay, ...args]: unknown[]) {
+        if (typeof fn !== "function" || delay !== undefined && typeof delay !== "number") throw new Error("Expected a timer callback and delay");
+        const callback = () => fn(...args);
+        const handle = target(callback, delay);
+        if (delay === 600_000) deadlines.set(Number(handle), callback);
+        return handle;
+      },
+    }));
+    const cleared = spyOn(globalThis, "clearTimeout").mockImplementation((handle) => { deadlines.delete(Number(handle)); clear(Number(handle)); });
+    try {
+      const job = f.manager.setup({ destination: "pc", machine_id: "windows" });
+      await within(f.approval.promise);
+      f.manager.action(job.id, { action: "approve" });
+      await within(f.waiting.promise);
+      const state = f.manager["jobs"].get(job.id);
+      if (!state) throw new Error("Setup job missing");
+      const expire = deadlines.get(Number(state.timer));
+      expect(expire).toBeDefined();
+      if (!expire) return;
+      // When the active deadline expires, without waiting on wall-clock time.
+      expire();
+      await state.finished;
+      // Then this is a timeout, not explicit cancellation, and the PC keeps retrying.
+      expect(job.phase).toBe("failed");
+      expect(f.runtime.machine.state).toBe("reconnecting");
+      expect(f.runtime.retry).toBeDefined();
+      expect(f.runtime.updateCancelled).not.toBe(true);
+    } finally { timer.mockRestore(); cleared.mockRestore(); f.close(); }
+  });
+
+  it("releases the automatic update queue when Windows needs sign-in", async () => {
+    // Given an old Windows bundle followed by another PC in the global update queue.
+    const f = windowsSetup(false);
+    f.runtime.machine.action_required = "update_bridge";
+    const linux = f.manager["runtime"]({ id: "linux", name: "linux", kind: "ssh", enabled: true, state: "error", action_required: "update_bridge", target: { destination: "linux" }, snapshot: null, error: null });
+    f.manager["machines"].set("linux", linux);
+    const second = Promise.withResolvers<void>();
+    const update = f.manager.updateBridge.bind(f.manager);
+    const started: string[] = [];
+    const updates = spyOn(f.manager, "updateBridge").mockImplementation((id, scheduled) => {
+      started.push(id);
+      const job = update(id, scheduled);
+      if (id === "linux") { f.manager.action(job.id, { action: "cancel" }); second.resolve(); }
+      return job;
+    });
+    try {
+      // When both updates are queued, nobody signs in or cancels Windows.
+      f.manager["queueAutoUpdate"]("windows");
+      f.manager["queueAutoUpdate"]("linux");
+      await within(second.promise, "Windows sign-in held the automatic update queue");
+      await f.manager["autoChain"];
+      // Then the next update starts while Windows reconnects with startup choices available.
+      expect(started).toEqual(["windows", "linux"]);
+      expect(f.runtime.machine).toMatchObject({ action_required: "windows_login", state: "reconnecting" });
+      expect(f.runtime.retry).toBeDefined();
+    } finally { updates.mockRestore(); f.close(); }
+  }, 10_000);
+
+  it("offers one-time headless consent when the Windows scheduler refuses startup", async () => {
+    // Given a scheduler failure transported through the real startup-status reader.
+    const startupNotice = windowsHost.startupNotice;
+    const f = windowsSetup();
+    const schedulerError = "Task registration denied (0x80070005)";
+    // Restore the reader that this fixture normally replaces.
+    const statusReader = spyOn(SshConnection.prototype, "runPowerShell").mockResolvedValue(`interactive_failed: ${schedulerError}`);
+    windowsHost.startupNotice = startupNotice;
+    const forced = Promise.withResolvers<void>();
+    const starts: boolean[] = [];
+    const start = spyOn(windowsHost, "start").mockImplementation(async (_ssh, options) => {
+      starts.push(options.headless === true);
+      if (options.headless) { forced.resolve(); throw new Error("fixture stops after consent is consumed"); }
+    });
+    try {
+      const job = f.manager.setup({ destination: "pc", machine_id: "windows" });
+      await within(f.approval.promise);
+      f.manager.action(job.id, { action: "approve" });
+      await within(f.waiting.promise, "scheduler failure did not offer startup choices");
+      expect(job.step).toBe(schedulerError);
+      expect(job.action_required).toBe("windows_login");
+      // When the user explicitly chooses a headless start.
+      f.manager.action(job.id, { action: "start_headless" });
+      f.resume.resolve();
+      await within(forced.promise);
+      await f.manager["jobs"].get(job.id)?.finished;
+      // Then only that next launch carries headless consent.
+      expect(starts).toEqual([false, true]);
+      expect(f.manager["jobs"].get(job.id)?.headlessStart).toBe(false);
+    } finally { start.mockRestore(); statusReader.mockRestore(); f.close(); }
+  }, 10_000);
+
   it("labels the first start of a bridge as its own step, not as a restart", () => {
     const { manager, drive, job } = fixture("installing", "Installing verified linux-x64 bundle…");
     drive.progress(job, "install", 0, null);

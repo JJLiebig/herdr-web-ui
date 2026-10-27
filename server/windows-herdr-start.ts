@@ -83,8 +83,8 @@ try {
   Write-Output 'started'
 } finally {
   # Unregistering a task leaves its running action (and herdr) alive.
-  if ($null -ne $registered) { $folder.DeleteTask($taskName, 0) }
-  if ([IO.Directory]::Exists($directory)) { Remove-Item -LiteralPath $directory -Recurse -Force }
+  try { if ($null -ne $registered) { $folder.DeleteTask($taskName, 0) } }
+  finally { if ([IO.Directory]::Exists($directory)) { Remove-Item -LiteralPath $directory -Recurse -Force } }
 }
 `;
 

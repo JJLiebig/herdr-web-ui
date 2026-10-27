@@ -7,8 +7,7 @@
  * Windows differs in three places that are easy to get wrong:
  * - herdr's socket is a marker file plus a named pipe of the same path (herdr/client.ts).
  * - A process started inside the SSH session dies with it. The bridge is created through
- *   WMI (Win32_Process.Create), whose parent is the WMI host, so it survives logout like
- *   herdr's own server does.
+ *   WMI (Win32_Process.Create), whose parent is the WMI host, so the bridge survives logout.
  * - An administrator's authorized keys live in %ProgramData%\ssh\administrators_authorized_keys
  *   with a fixed ACL; everyone else's in ~\.ssh\authorized_keys.
  */
@@ -132,7 +131,7 @@ export interface RemoteHost {
   installHerdr?(ssh: SshConnection): Promise<string>;
   stop(ssh: SshConnection, pid: number): Promise<void>;
   start(ssh: SshConnection, options: StartOptions): Promise<void>;
-  /** A cold start waiting for the account's desktop login, rather than a failed bridge. */
+  /** A cold start needing desktop sign-in or consent after an interactive-launch failure. */
   startupNotice?(ssh: SshConnection, session?: string): Promise<string | null>;
   descriptors(ssh: SshConnection): Promise<BridgeDescriptor[]>;
 }
@@ -373,7 +372,10 @@ export const windowsHost: RemoteHost = {
     const suffix = session ? `-${session}` : "";
     const name = psQuote(`bridge${suffix}.startup`);
     const result = await ssh.runPowerShell(`$status = Join-Path "${WINDOWS_REGISTRY}" ${name}; if (Test-Path -LiteralPath $status) { [IO.File]::ReadAllText($status) }`);
-    return result.trim() === "waiting_login" ? WAITING_FOR_WINDOWS_LOGIN : null;
+    const status = result.trim();
+    if (status === "waiting_login") return WAITING_FOR_WINDOWS_LOGIN;
+    if (status.startsWith("interactive_failed: ")) return status.slice("interactive_failed: ".length);
+    return null;
   },
   async descriptors(ssh) {
     return parseDescriptors((await ssh.runPowerShell(WINDOWS_DESCRIPTORS)).split("\n"));
