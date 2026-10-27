@@ -3284,6 +3284,16 @@ The values are the ones in `src/styles.css`.
   bindings on phones and desktops.
 - `document.title` is `<pane title> · Ovis` while selected, otherwise `Ovis`.
 
+### Windows remote startup
+
+An absent Windows herdr waits for the account's desktop sign-in. The PC's existing status notice
+offers **Review startup options**; the existing setup dialog explains the sandbox and possible
+desktop-tool limitations before **Start without Windows sign-in** authorizes one start. It adds no
+persistent preference, second dialog, or new visual treatment. This follows the visible-state and
+explicit-override pattern of [VS Code Workspace Trust](https://code.visualstudio.com/docs/editing/workspaces/workspace-trust),
+adapted to choosing a remote startup environment rather than granting workspace trust. No code or
+visual assets are copied. Cancel stops pending attempts; existing servers and panes stay running.
+
 ### Accepted debt
 
 | Item | Location | Why accepted | Exit |

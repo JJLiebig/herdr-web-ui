@@ -42,10 +42,24 @@ The web UI can itself run on Windows x64 and connect to other PCs with Git for W
 
 ### Windows PCs
 
-Setup first asks the PC in `sh`; one that cannot run it (cmd or PowerShell as the OpenSSH default shell, whichever) is asked again in PowerShell, as a base64 `-EncodedCommand` that both shells pass through untouched. The bundle for `win32-x64` carries Bun only, under `%LOCALAPPDATA%\herdr-web-ui\remote-v<N>` (a junction to a checksum-named release directory). herdr is not bundled: an installed one is used (`%LOCALAPPDATA%\Programs\Herdr\bin\herdr.exe`, the stable alias its installer keeps), and otherwise setup runs herdr's own `install.cmd` from herdr.dev, which the approval list names. The bundle goes over by sftp, since PowerShell owns a redirected stdin. Registrations live in `%USERPROFILE%\.config\herdr-web-ui\bridges\`; the bridge and the herdr daemon are started through WMI (`Win32_Process.Create`), outside the SSH session's and the bridge's job objects, so they survive the logout and each other. The app key goes to `%ProgramData%\ssh\administrators_authorized_keys` for an administrator account (what Windows OpenSSH reads for one) and to `.ssh\authorized_keys` otherwise. herdr's socket there is a named pipe; the `herdr.sock` file is a `pid:start` marker.
+Setup first asks the PC in `sh`; one that cannot run it (cmd or PowerShell as the OpenSSH default shell, whichever) is asked again in PowerShell, as a base64 `-EncodedCommand` that both shells pass through untouched. The bundle for `win32-x64` carries Bun only, under `%LOCALAPPDATA%\herdr-web-ui\remote-v<N>` (a junction to a checksum-named release directory). herdr is not bundled: an installed one is used (`%LOCALAPPDATA%\Programs\Herdr\bin\herdr.exe`, the stable alias its installer keeps), and otherwise setup runs herdr's own `install.cmd` from herdr.dev, which the approval list names. The bundle goes over by sftp, since PowerShell owns a redirected stdin. Registrations live in `%USERPROFILE%\.config\herdr-web-ui\bridges\`; the bridge is started through WMI (`Win32_Process.Create`), outside the SSH session's job. A missing herdr daemon is started in the same account's signed-in Windows session through a temporary, ordinary-privilege task; the task is removed after launch and herdr survives bridge updates and SSH disconnects. The app key goes to `%ProgramData%\ssh\administrators_authorized_keys` for an administrator account (what Windows OpenSSH reads for one) and to `.ssh\authorized_keys` otherwise. herdr's socket there is a named pipe; the `herdr.sock` file is a `pid:start` marker.
 
 herdr has no `terminal attach` on Windows yet ([herdrdev/herdr#4821](https://github.com/herdrdev/herdr/issues/4821)), so a Windows PC reports `terminal_attach: false` and `terminal_mirror: true`. The chat lens works as on any PC (transcripts, status, prompts, files and input). The terminal lens is a stopgap: the bridge reads the pane's visible screen a few times a second (`pane.read`, ansi) and repaints it in the browser, so output and colours show and typing works, sent through `pane.send_text`. What a repaint cannot give: the cursor is not shown, output that comes and goes between two reads is not seen, and the grid is the pane's own size on that PC (`pane-geometry` with `fixed: true`), never the browser's. A phone narrower than that grid draws it folded to its width; the pane menu's Original width draws it as it is, panned sideways, and Wrap to screen folds it on a desktop too. The real terminal does not turn on by itself: it also needs the PTY sidecar (Node and `@lydell/node-pty`), which the `win32-x64` bundle does not ship, so a bridge without it keeps mirroring whatever herdr reports. It takes over once herdr attaches on Windows and a bundle ships the sidecar. WSL gives a Linux herdr, not the native Windows session.
 
+### Windows sign-in and headless startup
+
+After a reboot, an approved Windows PC keeps reconnecting until the SSH account signs in to Windows.
+A locked desktop still counts as signed in. Ovis starts herdr only for a pending connection; it adds
+no permanent logon task, stores no Windows password and does not request administrator privileges.
+
+If the PC must run without a desktop login, choose **Review startup options** and then
+**Start without Windows sign-in**. The warning applies to that one start: Codex commands that need
+its private-desktop sandbox can fail in this headless Windows session, and desktop-control tools may
+be unavailable. Ovis does not disable an agent's sandbox. A later cold start waits for sign-in again.
+
+An existing herdr server is always reused. Signing in later does not move an already-running
+headless server into the desktop session, and Ovis never restarts it or its panes automatically.
+An initial connection can be cancelled while waiting; already-started work stays running.
 ## Runtime and endpoints
 
 ```

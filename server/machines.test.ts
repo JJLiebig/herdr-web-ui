@@ -11,7 +11,7 @@ import { canSendSecret, sameOrigin, shellQuote, validateTarget } from "./machine
 import { handleMachineRequest, MACHINE_PROXY_PATH } from "./machine-api.ts";
 import type { BridgeDescriptor } from "./bridge.ts";
 import { createServer } from "./index.ts";
-import { MachineManager } from "./machines.ts";
+import { MachineActionRequired, MachineManager } from "./machines.ts";
 import { detectHost, psQuote, UNSUPPORTED_HOST, windowsBridgeFiles, windowsHost } from "./remote-host.ts";
 import { decodeClixml, SshConnection } from "./ssh.ts";
 import { terminalAttachSupported } from "./herdr/client.ts";
@@ -362,7 +362,7 @@ describe("machine boundaries", () => {
 
 // A setup job placed directly in the manager: driving a whole setup needs a real SSH host, but
 // action() and stage() are the code that decides what the dialog shows.
-type TestJob = { public: SetupJob; abort: AbortController; timer: ReturnType<typeof setTimeout>; stageStartedAt: number; pending?: { resolve(value: string): void; reject(error: Error): void }; update: boolean; auto: boolean; finished: Promise<void> };
+type TestJob = { public: SetupJob; abort: AbortController; timer: ReturnType<typeof setTimeout>; stageStartedAt: number; pending?: { resolve(value: string): void; reject(error: Error): void }; update: boolean; auto: boolean; finished: Promise<void>; headlessStart?: boolean };
 describe("setup job labels", () => {
   const dirs: string[] = [];
   const managers: MachineManager[] = [];
@@ -392,6 +392,79 @@ describe("setup job labels", () => {
     expect(manager.job("job")?.phase).toBe("installing");
     expect(manager.job("job")?.step).not.toBe("Review the changes on this PC");
     expect(job.public.step).toBe("Installing on this PC…");
+  });
+
+  it("requires current Windows-login consent for each headless start and rejects duplicate or cancelled requests", () => {
+    const { manager, job } = fixture("starting", "Waiting for Windows sign-in on this PC.");
+    job.pending = undefined;
+    expect(() => manager.action("job", { action: "start_headless" })).toThrow("not waiting");
+    job.public.action_required = "windows_login";
+    manager.action("job", { action: "start_headless" });
+    expect(job.headlessStart).toBe(true);
+    expect(manager.job("job")?.action_required).toBeNull();
+    expect(() => manager.action("job", { action: "start_headless" })).toThrow("not waiting");
+    job.headlessStart = false;
+    job.public.action_required = "windows_login";
+    manager.action("job", { action: "cancel" });
+    expect(() => manager.action("job", { action: "start_headless" })).toThrow("not waiting");
+    expect(job.headlessStart).toBe(false);
+  });
+
+  it("keeps retrying a login-waiting PC and reattaches its existing setup without changing the SSH target", () => {
+    const { manager, job } = fixture("starting", "Waiting for Windows sign-in on this PC.");
+    job.public.action_required = "windows_login";
+    type Waiting = { machine: { enabled: boolean; action_required?: string | null; state: string }; generation: number; retry?: unknown };
+    const internals = manager as unknown as { machines: Map<string, Waiting>; runtime(machine: unknown): Waiting; lost(runtime: Waiting, generation: number, error: Error): void };
+    const runtime = internals.runtime({ id: "machine", name: "pc", kind: "ssh", enabled: true, state: "connected", target: { destination: "pc" }, snapshot: null, error: null });
+    internals.machines.set("machine", runtime);
+    internals.lost(runtime, runtime.generation, new MachineActionRequired("Waiting for Windows sign-in on this PC.", "windows_login"));
+    expect(runtime.machine.state).toBe("reconnecting");
+    expect(runtime.machine.action_required).toBe("windows_login");
+    expect(runtime.retry).toBeDefined();
+    expect(manager.setup({ destination: "pc", machine_id: "machine" }).id).toBe("job");
+    expect(() => manager.setup({ destination: "another-pc", machine_id: "machine" })).toThrow("already running");
+    manager.patch("machine", { enabled: false });
+    expect(runtime.machine.action_required).toBeNull();
+    expect(runtime.machine.state).toBe("disconnected");
+    expect(runtime.retry).toBeUndefined();
+  });
+
+  it("consumes headless consent once even on failure, and cancels before another waiting-loop launch", async () => {
+    const inspection = { platform: "win32-x64" as const, home: "C:\\Users\\u", herdrPath: "C:\\herdr.exe", expectedSocket: "C:\\socket", bundleReady: true, bundleOlder: false, descriptors: [], runtimeDir: "C:\\runtime", registryDir: "C:\\registry" };
+    const mocks = [
+      spyOn(windowsHost, "inspect").mockResolvedValue(inspection),
+      spyOn(windowsHost, "herdrVersion").mockResolvedValue("herdr 0.9.5"),
+      spyOn(windowsHost, "descriptors").mockResolvedValue([]),
+      spyOn(windowsHost, "startupNotice").mockResolvedValue("Waiting for Windows sign-in on this PC."),
+      spyOn(Bun, "sleep").mockResolvedValue(undefined),
+    ];
+    try {
+      for (const decision of ["force", "cancel", "move"] as const) {
+        const { manager, job } = fixture("checking", "Checking the remote environment…");
+        job.auto = true;
+        if (decision === "move") job.public.target = { destination: "another-pc" };
+        const waiting = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>();
+        const drive = manager as unknown as { runtime(machine: unknown): { ssh: unknown; machine: { action_required?: string } }; prepare(runtime: unknown, job: TestJob): Promise<void>; pause(): Promise<void> };
+        drive.pause = () => { waiting.resolve(); return resume.promise; };
+        const runtime = drive.runtime({ id: "machine", name: "pc", kind: "ssh", enabled: true, target: { destination: "pc" }, snapshot: null, error: null });
+        runtime.ssh = { run: async () => { throw new Error("no sh on Windows"); }, close() {} };
+        const starts: boolean[] = [];
+        const start = spyOn(windowsHost, "start").mockImplementation(async (_ssh, options) => {
+          starts.push(options.headless === true);
+          if (options.headless) throw new Error("forced launch failed");
+        });
+        try {
+          const outcome = drive.prepare(runtime, job).then(() => null, (error: Error) => error);
+          await within(waiting.promise, "the setup did not wait for Windows sign-in");
+          if (decision === "move") expect(runtime.machine.action_required).not.toBe("windows_login");
+          manager.action("job", { action: decision === "cancel" ? "cancel" : "start_headless" });
+          resume.resolve();
+          expect((await outcome)?.message).toBe(decision === "cancel" ? "Setup cancelled" : "forced launch failed");
+          expect(starts).toEqual(decision === "cancel" ? [false] : [false, true]);
+          expect(job.headlessStart).toBe(false);
+        } finally { start.mockRestore(); }
+      }
+    } finally { for (const mock of mocks) mock.mockRestore(); }
   });
 
   it("drops the SSH question's heading as soon as it is answered", () => {

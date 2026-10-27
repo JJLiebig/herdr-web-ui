@@ -5,6 +5,13 @@
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const MACHINES_ZH: Record<string, string> = {
+  "Keep this dialog open until the PC connects.": "请保持此对话框打开，直到 PC 连接成功。",
+  "Waiting for Windows sign-in": "正在等待 Windows 登录",
+  "Sign in to Windows on this PC; Ovis will reconnect automatically.": "在此 PC 上登录 Windows 后，Ovis 将自动重新连接。",
+  "Review startup options": "查看启动选项",
+  "{name} is waiting for Windows sign-in{others}.": "{name} 正在等待 Windows 登录{others}。",
+  "Start without Windows sign-in": "不登录 Windows 直接启动",
+  "Starting without Windows sign-in can break Codex sandbox commands, and desktop-control tools may be unavailable. This choice applies to one start.": "不登录 Windows 直接启动可能导致 Codex 沙箱命令失败，桌面控制工具也可能无法使用。此选择仅适用于本次启动。",
   "Expand {name}": "展开 {name}",
   "Collapse {name}": "折叠 {name}",
   "Disconnected": "已断开连接",

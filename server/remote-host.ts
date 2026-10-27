@@ -21,6 +21,7 @@ import { shellQuote } from "./machine-security.ts";
 import { bundleFile, type InstallStage } from "./remote-bundle.ts";
 import type { SshConnection } from "./ssh.ts";
 import { psQuote } from "./powershell.ts";
+import { WAITING_FOR_WINDOWS_LOGIN } from "./windows-herdr-start.ts";
 
 export const REMOTE_PATH = 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; ';
 export const BUNDLE_DIR = `.local/share/herdr-web-ui/remote-v${REMOTE_BUNDLE_VERSION}`;
@@ -89,7 +90,7 @@ export interface HostInspection {
   runtimeDir: string;
   registryDir: string;
 }
-export interface StartOptions { session?: string; herdrPath: string; inspection: HostInspection }
+export interface StartOptions { session?: string; herdrPath: string; inspection: HostInspection; headless?: boolean }
 /**
  * The Windows lock's stable reclaim prefix. It is ASCII-safe even when the state directory,
  * destination or account is not. The state directory and target outlive a restart (a PID does
@@ -131,6 +132,8 @@ export interface RemoteHost {
   installHerdr?(ssh: SshConnection): Promise<string>;
   stop(ssh: SshConnection, pid: number): Promise<void>;
   start(ssh: SshConnection, options: StartOptions): Promise<void>;
+  /** A cold start waiting for the account's desktop login, rather than a failed bridge. */
+  startupNotice?(ssh: SshConnection, session?: string): Promise<string | null>;
   descriptors(ssh: SshConnection): Promise<BridgeDescriptor[]>;
 }
 
@@ -341,7 +344,7 @@ export const windowsHost: RemoteHost = {
       "Write-Output ''",
     ].join("\n"));
   },
-  async start(ssh, { session, herdrPath, inspection }) {
+  async start(ssh, { session, herdrPath, inspection, headless }) {
     if (!herdrPath) throw new Error("herdr is not installed on this PC");
     const files = windowsBridgeFiles(session);
     // a launcher script: cmd can set the environment and redirect the log without any
@@ -351,6 +354,7 @@ export const windowsHost: RemoteHost = {
       // the paths below are UTF-8: a profile such as C:\Users\홍길동 is lost in an ANSI batch file
       "chcp 65001 >nul",
       `set "HERDR_REMOTE_SESSION=${cmdValue(session ?? "")}"`,
+      `set "OVIS_WINDOWS_HEADLESS_START=${headless ? "1" : ""}"`,
       `set "OVIS_HERDR_BIN=${cmdValue(herdrPath)}"`,
       `set "HERDR_WEB_HERDR_BIN=${cmdValue(herdrPath)}"`,
       `"${cmdValue(`${inspection.runtimeDir}\\bin\\bun.exe`)}" "${cmdValue(`${inspection.runtimeDir}\\server\\remote-entry.ts`)}" >> "${cmdValue(`${inspection.registryDir}\\${files.log}`)}" 2>&1`,
@@ -364,6 +368,12 @@ export const windowsHost: RemoteHost = {
       `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "cmd.exe /d /c \`"$dir\\${files.launcher}\`""; CurrentDirectory = $env:USERPROFILE }`,
       "if ($r.ReturnValue -ne 0) { throw \"Could not start the bridge (Win32_Process.Create returned $($r.ReturnValue))\" }",
     ].join("\n"));
+  },
+  async startupNotice(ssh, session) {
+    const suffix = session ? `-${session}` : "";
+    const name = psQuote(`bridge${suffix}.startup`);
+    const result = await ssh.runPowerShell(`$status = Join-Path "${WINDOWS_REGISTRY}" ${name}; if (Test-Path -LiteralPath $status) { [IO.File]::ReadAllText($status) }`);
+    return result.trim() === "waiting_login" ? WAITING_FOR_WINDOWS_LOGIN : null;
   },
   async descriptors(ssh) {
     return parseDescriptors((await ssh.runPowerShell(WINDOWS_DESCRIPTORS)).split("\n"));

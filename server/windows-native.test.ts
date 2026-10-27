@@ -5,10 +5,11 @@
  * on the Windows runners of reusable CI and the remote-bundle workflow (#271).
  */
 import { expect, it } from "bun:test";
-import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { rm } from "node:fs/promises";
 
 import { claudeProcessSession, forgetClaudeSessions, processClaudeConfigDir } from "./claude-store.ts";
 import { Database } from "bun:sqlite";
@@ -22,8 +23,68 @@ import { psQuote } from "./powershell.ts";
 import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
 import { isAgyProcessName, windowsHolders } from "./agy-store.ts";
 import { ancestorsToRepoRoot } from "./skills/walk.ts";
+import { startInteractiveWindowsHerdr } from "./windows-herdr-start.ts";
 
 const onWindows = process.platform === "win32";
+
+it.skipIf(!onWindows)("starts a desktop child outside the launcher, preserving quoted arguments and private environment, or waits without launching", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ovis-desktop-start-"));
+  const resultPath = join(root, "result.json");
+  const stopPath = join(root, "stop");
+  const script = join(root, "child with spaces.ts");
+  const sentinel = "private-launch-sentinel-\"&%!\n한글";
+  const previous = process.env["OVIS_START_TEST_SECRET"];
+  let pid: number | undefined;
+  const watcher = watch(root);
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const result = new Promise<{ pid: number; secret: string; args: string[]; session: number }>((resolve, reject) => {
+    deadline = setTimeout(() => reject(new Error("the desktop child did not answer")), 15_000);
+    watcher.on("change", () => {
+      if (existsSync(resultPath)) { clearTimeout(deadline); resolve(JSON.parse(readFileSync(resultPath, "utf8"))); }
+    });
+  });
+  // A waiting host has no child and therefore no result; still observe a later rejection on failure.
+  void result.catch(() => {});
+  writeFileSync(script, `import { watch, existsSync, writeFileSync } from 'node:fs';
+import { dlopen, FFIType } from 'bun:ffi';
+const { symbols } = dlopen('kernel32.dll', { ProcessIdToSessionId: { args: [FFIType.u32, FFIType.ptr], returns: FFIType.i32 } });
+const session = new Uint32Array(1); if (!symbols.ProcessIdToSessionId(process.pid, session)) throw new Error('no session');
+watch(${JSON.stringify(root)}, () => { if (existsSync(${JSON.stringify(stopPath)})) process.exit(0); });
+writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({pid:process.pid, secret:process.env.OVIS_START_TEST_SECRET, args:process.argv.slice(2), session:session[0]}));
+`);
+  process.env["OVIS_START_TEST_SECRET"] = sentinel;
+  try {
+    const started = await startInteractiveWindowsHerdr(process.execPath, [script, "argument with spaces & 한글"], join(root, "herdr.log"));
+    if (started === "waiting_login") {
+      expect(existsSync(resultPath)).toBe(false);
+    } else {
+      // The launcher already exited, but this child's watch still runs in the desktop session.
+      const child = await result;
+      pid = child.pid;
+      expect(child.session).toBeGreaterThan(0);
+      expect(child.secret).toBe(sentinel);
+      expect(child.args).toEqual(["argument with spaces & 한글"]);
+      expect(() => process.kill(child.pid, 0)).not.toThrow();
+    }
+    expect(readdirSync(root).filter((name) => name.startsWith("herdr-start-"))).toEqual([]);
+  } finally {
+    clearTimeout(deadline);
+    const closed = new Promise<void>((resolve) => watcher.once("close", resolve));
+    watcher.close();
+    await closed;
+    if (previous === undefined) delete process.env["OVIS_START_TEST_SECRET"]; else process.env["OVIS_START_TEST_SECRET"] = previous;
+    // Only this fixture's child is stopped, never a herdr daemon or another test's task.
+    if (pid !== undefined) try { process.kill(pid); } catch {}
+    const cleanupBy = Date.now() + 5000;
+    for (;;) {
+      try { await rm(root, { recursive: true, force: true }); break; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EBUSY" || Date.now() >= cleanupBy) throw error;
+        await Bun.sleep(25);
+      }
+    }
+  }
+}, 60_000);
 
 it.skipIf(!onWindows)("stops skill discovery at the user's home whatever its letter case", () => {
   const home = mkdtempSync(join(tmpdir(), "herdr-home-case-"));
