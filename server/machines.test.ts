@@ -1141,9 +1141,9 @@ describe("host detection", () => {
     expect(decodeClixml(stderr)).toBe("Another installation is in progress; retry shortly\nAt line:4 char:1 <x>");
     expect(decodeClixml("#< CLIXML\n<Objs><Obj S=\"progress\"/></Objs>")).toBe("PowerShell failed");
   });
-  it("gives each herdr session its own bridge log and launcher on Windows", () => {
-    expect(windowsBridgeFiles()).toEqual({ log: "bridge.log", launcher: "start-bridge.cmd" });
-    expect(windowsBridgeFiles("web-qa")).toEqual({ log: "bridge-web-qa.log", launcher: "start-bridge-web-qa.cmd" });
+  it("gives each herdr session its own bridge log, launcher and startup status on Windows", () => {
+    expect(windowsBridgeFiles()).toEqual({ log: "bridge.log", launcher: "start-bridge.cmd", status: "bridge.startup" });
+    expect(windowsBridgeFiles("web-qa")).toEqual({ log: "bridge-web-qa.log", launcher: "start-bridge-web-qa.cmd", status: "bridge-web-qa.startup" });
   });
   it("quotes for PowerShell with doubled single quotes only", () => {
     expect(psQuote("C:\\Users\\o'brien\\x")).toBe("'C:\\Users\\o''brien\\x'");
@@ -1425,5 +1425,57 @@ describe("saved PCs that cannot be read", () => {
     expect(() => new MachineManager(dir, {} as PushService, new CompletionTracker(null), offline)).toThrow("Invalid machines.json");
     expect(readFileSync(join(dir, "machines.json"), "utf8")).toBe("{}");
     expect(readdirSync(dir).filter((name) => name.includes("corrupt"))).toEqual([]);
+  });
+});
+
+describe("a Windows startup retried after a scheduler failure", () => {
+  it("does not read the previous attempt's startup status as this one's", async () => {
+    // Given a PC whose last start left a scheduler failure in its startup status file.
+    const dir = mkdtempSync(join(tmpdir(), "herdr-windows-stale-status-"));
+    const manager = new MachineManager(dir, {} as never, {} as never, async () => { throw new Error("fixture local offline"); });
+    const runtime = manager["runtime"]({ id: "windows", name: "pc", kind: "ssh", enabled: true, state: "error", action_required: "windows_start_failed", target: { destination: "pc" }, snapshot: null, error: "Task registration denied" });
+    manager["machines"].set("windows", runtime);
+    const job = { public: { id: "review", machine_id: "windows", target: { destination: "pc" }, phase: "starting", step: "Starting", challenge: null, installations: [], error: null, ssh_output: null } as SetupJob, abort: new AbortController(), timer: setTimeout(() => {}, 600_000), update: false, auto: false, stageStartedAt: Date.now(), finished: Promise.resolve() };
+    job.timer.unref();
+    manager["jobs"].set(job.public.id, job);
+    manager["wait"] = async () => "approved";
+    const socket = "C:\\socket";
+    const descriptor = { pid: 4242, port: 7317, token: "a".repeat(64), socket_path: socket, bridge_protocol: BRIDGE_PROTOCOL, bundle_version: REMOTE_BUNDLE_VERSION, managed_remote: true };
+    let status: string | null = "interactive_failed: Task registration denied";
+    let launched = false, registered = false, pauses = 0;
+    runtime.ssh = {
+      run: async () => { throw new Error("Windows has no sh"); },
+      runPowerShell: async (script: string) => {
+        // The remote registry: the launch script may clear the status before it starts the bridge.
+        if (script.includes("Win32_Process")) {
+          if (script.includes(`Remove-Item -LiteralPath "$dir\\${windowsBridgeFiles().status}"`)) status = null;
+          launched = true;
+          return "";
+        }
+        if (script.includes("-Filter *.json")) return registered ? JSON.stringify(descriptor) : "";
+        if (script.includes("ReadAllText($status)")) return status ?? "";
+        throw new Error("Unexpected remote script");
+      },
+      close() {},
+    } as never;
+    const mocks = [
+      spyOn(windowsHost, "inspect").mockResolvedValue({ platform: "win32-x64", home: "C:\\Users\\u", herdrPath: "C:\\herdr.exe", expectedSocket: socket, bundleReady: true, bundleOlder: false, descriptors: [], runtimeDir: "C:\\runtime", registryDir: "C:\\registry" }),
+      spyOn(windowsHost, "herdrVersion").mockResolvedValue("herdr 0.9.5"),
+      spyOn(manager as never, "verify").mockResolvedValue({ endpoint: { url: "http://fixture", token: "fixture" }, identity: { herdr: { version: "0.9.5", protocol: 22 } } } as never),
+      // The new bridge loads, clears any status itself and registers after the first poll.
+      spyOn(Bun, "sleep").mockImplementation(async () => { if (launched) { status = null; registered = true; } }),
+    ];
+    manager["pause"] = async () => { if (++pauses >= 3) job.abort.abort(); };
+    try {
+      // When the user retries after fixing Task Scheduler.
+      const outcome = await manager["prepare"](runtime, job).then(() => "connected", (error: Error) => error.message);
+      // Then the new bridge connects instead of the old failure being shown again.
+      expect(outcome).toBe("connected");
+      expect(job.public.action_required).not.toBe("windows_start_failed");
+    } finally {
+      manager.stop(); clearTimeout(job.timer);
+      for (const mock of mocks) mock.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

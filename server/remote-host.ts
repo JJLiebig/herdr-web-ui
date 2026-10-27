@@ -203,9 +203,9 @@ function cmdValue(value: string): string {
  * redirects into, so a second bridge sent to the same log never starts: "The process cannot
  * access the file because it is being used by another process" (live-verified).
  */
-export function windowsBridgeFiles(session?: string): { log: string; launcher: string } {
+export function windowsBridgeFiles(session?: string): { log: string; launcher: string; status: string } {
   const suffix = session ? `-${session}` : "";
-  return { log: `bridge${suffix}.log`, launcher: `start-bridge${suffix}.cmd` };
+  return { log: `bridge${suffix}.log`, launcher: `start-bridge${suffix}.cmd`, status: `bridge${suffix}.startup` };
 }
 
 const WINDOWS_BUNDLE = `${WINDOWS_BUNDLE_BASE}\\remote-v${REMOTE_BUNDLE_VERSION}`;
@@ -363,6 +363,9 @@ export const windowsHost: RemoteHost = {
       `$dir = "${WINDOWS_REGISTRY}"; New-Item -ItemType Directory -Force $dir | Out-Null`,
       // one literal per line: WriteAllLines ends each with the CRLF cmd expects
       `[IO.File]::WriteAllLines("$dir\\${files.launcher}", [string[]]@(${launcher.map(psQuote).join(", ")}), (New-Object Text.UTF8Encoding $false))`,
+      // the previous attempt's startup status must not answer for this one: the new bridge
+      // clears it only once it has loaded, after the manager's first status read
+      `Remove-Item -LiteralPath "$dir\\${files.status}" -Force -ErrorAction SilentlyContinue`,
       // not Start-Process: that child belongs to the SSH session's job and dies with it
       `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "cmd.exe /d /c \`"$dir\\${files.launcher}\`""; CurrentDirectory = $env:USERPROFILE }`,
       "if ($r.ReturnValue -ne 0) { throw \"Could not start the bridge (Win32_Process.Create returned $($r.ReturnValue))\" }",
