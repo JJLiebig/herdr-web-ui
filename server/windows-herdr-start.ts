@@ -69,7 +69,11 @@ try {
   }
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
   while ([IO.Directory]::Exists($directory)) {
-    if ($running.State -ne 2 -and $running.State -ne 4) { throw 'The interactive herdr launcher exited before reading its payload' }
+    if ($running.State -ne 2 -and $running.State -ne 4) {
+      # A signed-out user's fresh task can stay Ready/never-run without Run throwing an error.
+      if ($registered.State -eq 3 -and $registered.LastTaskResult -eq 267011) { Write-Output 'waiting_login'; exit 0 } # SCHED_S_TASK_HAS_NOT_RUN
+      throw 'The interactive herdr launcher exited before reading its payload'
+    }
     if ([DateTime]::UtcNow -ge $deadline) {
       $running.Stop()
       throw 'The interactive herdr launcher did not read its payload within 30 seconds'

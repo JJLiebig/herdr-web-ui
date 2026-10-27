@@ -4,7 +4,7 @@
  * Windows branches is tested with rows and paths handed in (gjc-runtime.test.ts); these run
  * on the Windows runners of reusable CI and the remote-bundle workflow (#271).
  */
-import { expect, it } from "bun:test";
+import { expect, it, spyOn } from "bun:test";
 import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -26,6 +26,41 @@ import { ancestorsToRepoRoot } from "./skills/walk.ts";
 import { startInteractiveWindowsHerdr } from "./windows-herdr-start.ts";
 
 const onWindows = process.platform === "win32";
+
+it.skipIf(!onWindows)("waits when Windows accepts an interactive task without running it, but rejects a failed launcher", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ovis-desktop-not-run-"));
+  const marker = join(root, "unexpected-child");
+  const script = join(root, "child.ts");
+  writeFileSync(script, `await Bun.write(${JSON.stringify(marker)}, 'launched');`);
+  const spawn = Bun.spawn.bind(Bun);
+  let failedResult = false;
+  const failures: unknown[] = [];
+  // Replay Run returning no instance while the real, fresh task remains Ready/never-run.
+  // Registration, status queries, private payload creation and cleanup still run natively.
+  const intercepted = spyOn(Bun, "spawn").mockImplementation(((command: string[], options: Parameters<typeof Bun.spawn>[1]) => {
+    const args = [...command];
+    const encoded = args.indexOf("-EncodedCommand") + 1;
+    let source = Buffer.from(args[encoded]!, "base64").toString("utf16le");
+    source = source.replace("try { $running = $registered.Run($null) }", "try { $running = $null }");
+    // A completed launcher error must not be mistaken for a never-run task.
+    if (failedResult) source = source.replace("$deadline = [DateTime]::UtcNow.AddSeconds(30)", "$registered = [pscustomobject]@{ State = 3; LastTaskResult = 1 }; $deadline = [DateTime]::UtcNow.AddSeconds(30)");
+    args[encoded] = Buffer.from(source, "utf16le").toString("base64");
+    return spawn(args, options);
+  }) as typeof Bun.spawn);
+  try {
+    expect(await startInteractiveWindowsHerdr(process.execPath, [script], join(root, "herdr.log"))).toBe("waiting_login");
+    expect(existsSync(marker)).toBe(false);
+    expect(readdirSync(root).filter((name) => name.startsWith("herdr-start-"))).toEqual([]);
+    failedResult = true;
+    await expect(startInteractiveWindowsHerdr(process.execPath, [script], join(root, "herdr.log"))).rejects.toThrow("exited before reading its payload");
+    expect(existsSync(marker)).toBe(false);
+    expect(readdirSync(root).filter((name) => name.startsWith("herdr-start-"))).toEqual([]);
+  } catch (error) { failures.push(error); }
+  intercepted.mockRestore();
+  try { rmSync(root, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "Desktop wait test and cleanup failed");
+}, 30_000);
 
 it.skipIf(!onWindows)("starts a desktop child outside the launcher, preserving quoted arguments and private environment, or waits without launching", async () => {
   const root = mkdtempSync(join(tmpdir(), "ovis-desktop-start-"));
